@@ -1,0 +1,48 @@
+# Dependências
+node_modules/
+
+# Variáveis locais e segredos
+.env
+.env.*
+!.env.example
+
+# Saídas e dados temporários
+output/
+tmp/
+var/
+uploads/
+*.XTE
+*.ZTE
+*.XTR
+*.ZTR
+
+# Logs e cobertura
+logs/
+*.log
+npm-debug.log*
+coverage/
+.nyc_output/
+
+# Builds e caches
+dist/
+build/
+.cache/
+.eslintcache
+
+# Editores
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.swp
+*.swo
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+
+# Temporários
+*.tmp
+*.temp
+*.bak
+*~

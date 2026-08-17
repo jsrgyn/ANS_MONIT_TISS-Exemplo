@@ -1,0 +1,51 @@
+{
+  "snapshotDate": "2026-08-09",
+  "officialVersionPage": "https://www.gov.br/ans/pt-br/assuntos/prestadores/padrao-para-troca-de-informacao-de-saude-suplementar-2013-tiss/padrao-tiss-julho-2026",
+  "versions": {
+    "organizational": "202607",
+    "contentAndStructure": "202511",
+    "conceptRepresentation": "202607",
+    "securityAndPrivacy": "202511",
+    "monitoringCommunication": "01.06.00"
+  },
+  "largeArtifacts": [
+    {
+      "file": "Padrao_TISS_Representacao_de_Conceitos_em_Saude_202607.zip",
+      "url": "https://www.ans.gov.br/arquivos/extras/tiss/Padrao_TISS_Representacao_de_Conceitos_em_Saude_202607.zip",
+      "bytes": 413232247,
+      "sha256": "c8410589327885c5170b9244a0ab95af64a56931e56c81aae5bf4be6e2180963"
+    },
+    {
+      "file": "Padrao_TISS_arquivos_auxiliares_202607.zip",
+      "url": "https://www.ans.gov.br/arquivos/extras/tiss/Padrao_TISS_arquivos_auxiliares_202607.zip",
+      "bytes": 195029868,
+      "sha256": "04b0514e8a5be80d42e77310a7582ad1f8f711d624e8c150904f5ab2940391da"
+    }
+  ],
+  "artifacts": [
+    {
+      "file": "PadroTISS_ComponenteOrganizacional_202607.pdf",
+      "url": "https://www.gov.br/ans/pt-br/assuntos/prestadores/padrao-para-troca-de-informacao-de-saude-suplementar-2013-tiss/PadroTISS_ComponenteOrganizacional_202607.pdf",
+      "bytes": 1957069,
+      "sha256": "2f14e3f04c336a97bdb6a43fe652cb8212fd6bcd7c3386a6df2f6e22dd60dbd0"
+    },
+    {
+      "file": "PadroTISS_ComponentedeContedoeEstrutura_202511.zip",
+      "url": "https://www.gov.br/ans/pt-br/assuntos/prestadores/padrao-para-troca-de-informacao-de-saude-suplementar-2013-tiss/PadroTISS_ComponentedeContedoeEstrutura_202511.zip",
+      "bytes": 8918177,
+      "sha256": "6a720ed27da8397fef584e30d794aa56f18906d253ccdf460c30b1019a3a4d3b"
+    },
+    {
+      "file": "PadroTISSComunicao_202511.zip",
+      "url": "https://www.gov.br/ans/pt-br/assuntos/prestadores/padrao-para-troca-de-informacao-de-saude-suplementar-2013-tiss/PadroTISSComunicao_202511.zip",
+      "bytes": 102554,
+      "sha256": "db8640e1c3b87085892f54f838bfcea9934439ff365798c8428559f88c13d62d"
+    },
+    {
+      "file": "PadroTISS_segurana_202511.zip",
+      "url": "https://www.gov.br/ans/pt-br/arquivos/assuntos/prestadores/padrao-para-troca-de-informacao-de-saude-suplementar-tiss/padrao-tiss/PadroTISS_segurana_202511.zip",
+      "bytes": 513668,
+      "sha256": "09af14231ae40b95d055fb3effbadfba1f71bdf676a5a3c69a057bace0d2ff73"
+    }
+  ]
+}

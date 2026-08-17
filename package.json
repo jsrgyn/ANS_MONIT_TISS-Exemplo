@@ -1,0 +1,52 @@
+{
+  "name": "ans-tiss-monitoramento",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Conversor CSV para XML XTE do Monitoramento TISS/ANS com validação XSD 01.06.00.",
+  "type": "module",
+  "main": "src/interfaces/http/server.js",
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "scripts": {
+    "dev": "node --watch src/interfaces/http/server.js",
+    "start": "node src/interfaces/http/server.js",
+    "gerar": "node src/interfaces/cli/generate.js",
+    "validar": "node src/interfaces/cli/validate.js",
+    "ans:download": "node scripts/download-ans-artifacts.js",
+    "test": "node --test",
+    "test:coverage": "node --test --experimental-test-coverage",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run lint && npm run format:check && npm test"
+  },
+  "keywords": [
+    "ans",
+    "tiss",
+    "monitoramento",
+    "csv",
+    "xml",
+    "xsd"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "csv-parse": "^7.0.2",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "helmet": "^8.3.0",
+    "multer": "^2.2.0",
+    "pino": "^10.3.1",
+    "pino-http": "^11.0.0",
+    "xmlbuilder2": "^4.0.3",
+    "xmllint-wasm": "^5.3.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.8.1",
+    "globals": "^17.9.0",
+    "prettier": "^3.9.6",
+    "supertest": "^7.2.2"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "mysql": {
+      "command": "/Users/johnathansilvaresende/.nvm/versions/node/v24.18.0/bin/node",
+      "args": [
+        "/Users/johnathansilvaresende/.nvm/versions/node/v24.18.0/lib/node_modules/@benborla29/mcp-server-mysql/dist/index.js"
+      ],
+      "env": {
+        "MYSQL_HOST": "10.0.1.86",
+        "MYSQL_PORT": "3306",
+        "MYSQL_USER": "apirest",
+        "MYSQL_PASS": "PortalSaude!@#153045",
+        "MYSQL_DB": "dados"
+      }
+    }
+  }
+}

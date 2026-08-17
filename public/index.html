@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ANS - Monitoramento TISS</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header>
+        <p class="eyebrow">Padrão TISS 2026</p>
+        <h1>Gerador de arquivo de Monitoramento TISS</h1>
+        <p>
+          Converte CSV em XTE, calcula o hash MD5 em ISO-8859-1 e valida no schema ANS 01.06.00.
+        </p>
+      </header>
+
+      <section class="card">
+        <form id="generator-form">
+          <div class="grid">
+            <label
+              >Registro ANS
+              <input
+                name="registro_ans"
+                inputmode="numeric"
+                maxlength="6"
+                pattern="\d{6}"
+                required
+                placeholder="123456"
+            /></label>
+            <label
+              >Competência
+              <input name="competencia" maxlength="7" required placeholder="202607 ou 07/2026"
+            /></label>
+            <label
+              >Número do lote
+              <input name="numero_lote" maxlength="12" required placeholder="LOTE0001"
+            /></label>
+            <label
+              >Sequencial do arquivo
+              <input
+                name="sequencial_arquivo"
+                inputmode="numeric"
+                maxlength="4"
+                value="0001"
+                required
+            /></label>
+          </div>
+
+          <label class="check"
+            ><input id="no-movement" name="sem_movimento" type="checkbox" /> Gerar competência sem
+            movimento (código 5016)</label
+          >
+          <label id="file-label"
+            >CSV do monitoramento
+            <input id="csv-file" name="arquivo" type="file" accept=".csv,text/csv" required
+          /></label>
+
+          <button type="submit">Gerar e validar XTE</button>
+        </form>
+      </section>
+
+      <section class="card compact">
+        <h2>Validar um XTE existente</h2>
+        <form id="validator-form" class="inline">
+          <input name="arquivo" type="file" accept=".xte,.xml,application/xml,text/xml" required />
+          <button type="submit" class="secondary">Validar XSD e hash</button>
+        </form>
+      </section>
+
+      <section class="card output" aria-live="polite">
+        <div class="output-title">
+          <h2>Resultado</h2>
+          <a id="download" hidden>Baixar XTE</a>
+        </div>
+        <pre id="log">Aguardando processamento.</pre>
+      </section>
+
+      <footer>
+        Os arquivos são processados apenas em memória e não são persistidos pelo servidor.
+      </footer>
+    </main>
+  </body>
+</html>
