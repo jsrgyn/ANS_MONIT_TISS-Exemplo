@@ -27,7 +27,7 @@ try {
   console.error(error.message);
   for (const detail of error.details ?? []) {
     console.error(
-      `- linha ${detail.linha ?? "-"}, ${detail.campo ?? "-"}: ${detail.mensagem ?? detail.message}`,
+      `- ${detail.localizacao ?? `L${detail.linha ?? "?"}:C${detail.coluna ?? "?"}`} — ${detail.campo ?? "-"}: ${detail.mensagem ?? detail.message}`,
     );
   }
   process.exitCode = 1;

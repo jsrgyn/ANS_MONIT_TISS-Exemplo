@@ -13,7 +13,8 @@ export function buildMonitoringXml({ metadata, blockType, records = [], noMoveme
   const document = create({ version: "1.0", encoding: "ISO-8859-1" });
   const root = document.ele(TISS_NAMESPACE, "mensagemEnvioANS");
   const hashParts = [];
-  const writer = createWriter(hashParts);
+  const sourceEvents = [];
+  const writer = createWriter(hashParts, sourceEvents);
 
   const header = root.ele("cabecalho");
   const transaction = header.ele("identificacaoTransacao");
@@ -35,7 +36,9 @@ export function buildMonitoringXml({ metadata, blockType, records = [], noMoveme
     if (!elementName) throw new AppError(`Tipo de bloco não suportado: ${blockType}.`);
     for (const record of records) {
       const element = operatorToAns.ele(elementName);
-      appendRecord(writer, element, blockType, record);
+      writer.withSource(record.sourceLines?.[0], () =>
+        appendRecord(writer, element, blockType, record),
+      );
     }
   }
 
@@ -49,7 +52,12 @@ export function buildMonitoringXml({ metadata, blockType, records = [], noMoveme
 
   const xml = document.end({ prettyPrint: true, indent: "  ", newline: "\r\n" });
   assertLatin1(xml, "xml");
-  return { xml, hash, buffer: Buffer.from(xml, "latin1") };
+  return {
+    xml,
+    hash,
+    buffer: Buffer.from(xml, "latin1"),
+    sourceMap: buildXmlSourceMap(xml, sourceEvents),
+  };
 }
 
 function appendRecord(writer, parent, blockType, record) {
@@ -73,19 +81,26 @@ function appendGuide(writer, parent, row) {
   writer.text(parent, "formaEnvio", row.forma_envio);
 
   const provider = parent.ele("dadosContratadoExecutante");
-  writer.text(provider, "CNES", row.executante_cnes);
-  writer.text(provider, "identificadorExecutante", row.executante_tipo_identificacao);
-  writer.text(provider, "codigoCNPJ_CPF", row.executante_cpf_cnpj);
-  writer.text(provider, "municipioExecutante", row.executante_municipio);
+  writer.text(provider, "CNES", row.executante_cnes, "executante_cnes");
+  writer.text(
+    provider,
+    "identificadorExecutante",
+    row.executante_tipo_identificacao,
+    "executante_tipo_identificacao",
+  );
+  writer.text(provider, "codigoCNPJ_CPF", row.executante_cpf_cnpj, "executante_cpf_cnpj");
+  writer.text(provider, "municipioExecutante", row.executante_municipio, "executante_municipio");
   writer.optional(
     parent,
     "registroANSOperadoraIntermediaria",
     row.operadora_intermediaria_registro,
+    "operadora_intermediaria_registro",
   );
   writer.optional(
     parent,
     "tipoAtendimentoOperadoraIntermediaria",
     row.operadora_intermediaria_tipo_atendimento,
+    "operadora_intermediaria_tipo_atendimento",
   );
 
   appendBeneficiary(writer, parent, row, false);
@@ -102,8 +117,8 @@ function appendGuide(writer, parent, row) {
 
   for (const remuneration of parseRemunerations(row.formas_remuneracao)) {
     const element = parent.ele("formasRemuneracao");
-    writer.text(element, "formaRemuneracao", remuneration.code);
-    writer.text(element, "valorRemuneracao", remuneration.value);
+    writer.text(element, "formaRemuneracao", remuneration.code, "formas_remuneracao");
+    writer.text(element, "valorRemuneracao", remuneration.value, "formas_remuneracao");
   }
 
   writer.optional(parent, "guiaSolicitacaoInternacao", row.guia_solicitacao_internacao);
@@ -127,7 +142,8 @@ function appendGuide(writer, parent, row) {
   const diagnoses = parsePipeValues(row.diagnosticos_cid10);
   if (diagnoses.length > 0) {
     const element = parent.ele("diagnosticosCID10");
-    for (const diagnosis of diagnoses) writer.text(element, "diagnosticoCID", diagnosis);
+    for (const diagnosis of diagnoses)
+      writer.text(element, "diagnosticoCID", diagnosis, "diagnosticos_cid10");
   }
 
   writer.optional(parent, "tipoAtendimento", row.tipo_atendimento);
@@ -151,13 +167,22 @@ function appendGuide(writer, parent, row) {
   writer.text(values, "valorPagoGuia", row.valor_pago_guia);
   writer.text(values, "valorPagoFornecedores", row.valor_pago_fornecedores);
   writer.text(values, "valorTotalTabelaPropria", row.valor_total_tabela_propria);
-  writer.text(values, "valorTotalCoParticipacao", row.valor_total_coparticipacao);
+  writer.text(
+    values,
+    "valorTotalCoParticipacao",
+    row.valor_total_coparticipacao,
+    "valor_total_coparticipacao",
+  );
 
   for (const value of parsePipeValues(row.declaracoes_nascido))
-    writer.text(parent, "declaracaoNascido", value);
+    writer.text(parent, "declaracaoNascido", value, "declaracoes_nascido");
   for (const value of parsePipeValues(row.declaracoes_obito))
-    writer.text(parent, "declaracaoObito", value);
-  for (const item of row.items) appendGuideProcedure(writer, parent.ele("procedimentos"), item);
+    writer.text(parent, "declaracaoObito", value, "declaracoes_obito");
+  for (const item of row.items) {
+    writer.withSource(item.sourceLine, () =>
+      appendGuideProcedure(writer, parent.ele("procedimentos"), item),
+    );
+  }
 }
 
 function appendGuideProcedure(writer, parent, item) {
@@ -168,17 +193,22 @@ function appendGuideProcedure(writer, parent, item) {
   writer.text(parent, "valorInformado", item.valor_informado);
   writer.text(parent, "quantidadePaga", item.quantidade_paga);
   writer.optional(parent, "unidadeMedida", item.unidade_medida);
-  writer.text(parent, "valorPagoProc", item.valor_pago_procedimento);
+  writer.text(parent, "valorPagoProc", item.valor_pago_procedimento, "valor_pago_procedimento");
   writer.text(parent, "valorPagoFornecedor", item.valor_pago_fornecedor);
-  writer.optional(parent, "CNPJFornecedor", item.fornecedor_cnpj);
-  writer.text(parent, "valorCoParticipacao", item.valor_coparticipacao_procedimento);
+  writer.optional(parent, "CNPJFornecedor", item.fornecedor_cnpj, "fornecedor_cnpj");
+  writer.text(
+    parent,
+    "valorCoParticipacao",
+    item.valor_coparticipacao_procedimento,
+    "valor_coparticipacao_procedimento",
+  );
 
   for (const detail of parsePackageDetails(item.detalhes_pacote)) {
     const element = parent.ele("detalhePacote");
-    writer.text(element, "codigoTabela", detail.table);
-    writer.text(element, "codigoProcedimento", detail.code);
-    writer.text(element, "quantidade", detail.quantity);
-    writer.optional(element, "unidadeMedida", detail.unit);
+    writer.text(element, "codigoTabela", detail.table, "detalhes_pacote");
+    writer.text(element, "codigoProcedimento", detail.code, "detalhes_pacote");
+    writer.text(element, "quantidade", detail.quantity, "detalhes_pacote");
+    writer.optional(element, "unidadeMedida", detail.unit, "detalhes_pacote");
   }
 }
 
@@ -189,15 +219,27 @@ function appendDirectSupply(writer, parent, row) {
   writer.text(parent, "dataFornecimento", row.data_fornecimento);
   writer.text(parent, "valorTotalFornecimento", row.valor_total_fornecimento);
   writer.text(parent, "valorTotalTabelaPropria", row.valor_total_tabela_propria);
-  writer.text(parent, "valorTotalCoParticipacao", row.valor_total_coparticipacao);
+  writer.text(
+    parent,
+    "valorTotalCoParticipacao",
+    row.valor_total_coparticipacao,
+    "valor_total_coparticipacao",
+  );
 
   for (const item of row.items) {
-    const procedure = parent.ele("procedimentos");
-    appendProcedureIdentification(writer, procedure, item, false);
-    writer.text(procedure, "quantidadeFornecida", item.quantidade_fornecida);
-    writer.optional(procedure, "unidadeMedida", item.unidade_medida);
-    writer.text(procedure, "valorFornecido", item.valor_fornecido);
-    writer.text(procedure, "valorCoParticipacao", item.valor_coparticipacao_procedimento);
+    writer.withSource(item.sourceLine, () => {
+      const procedure = parent.ele("procedimentos");
+      appendProcedureIdentification(writer, procedure, item, false);
+      writer.text(procedure, "quantidadeFornecida", item.quantidade_fornecida);
+      writer.optional(procedure, "unidadeMedida", item.unidade_medida);
+      writer.text(procedure, "valorFornecido", item.valor_fornecido);
+      writer.text(
+        procedure,
+        "valorCoParticipacao",
+        item.valor_coparticipacao_procedimento,
+        "valor_coparticipacao_procedimento",
+      );
+    });
   }
 }
 
@@ -205,8 +247,13 @@ function appendOtherRemuneration(writer, parent, row) {
   writer.text(parent, "tipoRegistro", row.tipo_registro);
   writer.text(parent, "dataProcessamento", row.data_processamento);
   const recipient = parent.ele("dadosRecebedor");
-  writer.text(recipient, "identificadorRecebedor", row.recebedor_tipo_identificacao);
-  writer.text(recipient, "codigoCNPJ_CPF", row.recebedor_cpf_cnpj);
+  writer.text(
+    recipient,
+    "identificadorRecebedor",
+    row.recebedor_tipo_identificacao,
+    "recebedor_tipo_identificacao",
+  );
+  writer.text(recipient, "codigoCNPJ_CPF", row.recebedor_cpf_cnpj, "recebedor_cpf_cnpj");
   writer.text(parent, "valorTotalInformado", row.valor_total_informado);
   writer.text(parent, "valorTotalGlosa", row.valor_total_glosa);
   writer.text(parent, "valorTotalPago", row.valor_total_pago);
@@ -214,16 +261,31 @@ function appendOtherRemuneration(writer, parent, row) {
 
 function appendPreestablishedValue(writer, parent, row) {
   writer.text(parent, "tipoRegistro", row.tipo_registro);
-  writer.text(parent, "competenciaCoberturaContratada", row.competencia_cobertura);
+  writer.text(
+    parent,
+    "competenciaCoberturaContratada",
+    row.competencia_cobertura,
+    "competencia_cobertura",
+  );
 
   if (row.operadora_intermediaria_registro) {
-    writer.text(parent, "registroANSOperadoraIntermediaria", row.operadora_intermediaria_registro);
+    writer.text(
+      parent,
+      "registroANSOperadoraIntermediaria",
+      row.operadora_intermediaria_registro,
+      "operadora_intermediaria_registro",
+    );
   } else {
     const provider = parent.ele("dadosPrestador");
-    writer.text(provider, "CNES", row.prestador_cnes);
-    writer.text(provider, "identificadorPrestador", row.prestador_tipo_identificacao);
-    writer.text(provider, "codigoCNPJ_CPF", row.prestador_cpf_cnpj);
-    writer.text(provider, "municipioPrestador", row.prestador_municipio);
+    writer.text(provider, "CNES", row.prestador_cnes, "prestador_cnes");
+    writer.text(
+      provider,
+      "identificadorPrestador",
+      row.prestador_tipo_identificacao,
+      "prestador_tipo_identificacao",
+    );
+    writer.text(provider, "codigoCNPJ_CPF", row.prestador_cpf_cnpj, "prestador_cpf_cnpj");
+    writer.text(provider, "municipioPrestador", row.prestador_municipio, "prestador_municipio");
   }
 
   writer.text(parent, "identificacaoValorPreestabelecido", row.identificacao_valor_preestabelecido);
@@ -234,27 +296,45 @@ function appendBeneficiary(writer, parent, row, directSupply) {
   const beneficiary = parent.ele("dadosBeneficiario");
   const identification = beneficiary.ele("identBeneficiario");
   const target = directSupply ? identification.ele("dadosSemCartao") : identification;
-  writer.optional(target, "numeroCartaoNacionalSaude", row.beneficiario_cns);
-  writer.optional(target, "cpfBeneficiario", row.beneficiario_cpf);
-  writer.text(target, "sexo", row.beneficiario_sexo);
-  writer.text(target, "dataNascimento", row.beneficiario_data_nascimento);
-  writer.text(target, "municipioResidencia", row.beneficiario_municipio_residencia);
-  writer.text(beneficiary, "numeroRegistroPlano", row.plano_registro);
+  writer.optional(target, "numeroCartaoNacionalSaude", row.beneficiario_cns, "beneficiario_cns");
+  writer.optional(target, "cpfBeneficiario", row.beneficiario_cpf, "beneficiario_cpf");
+  writer.text(target, "sexo", row.beneficiario_sexo, "beneficiario_sexo");
+  writer.text(
+    target,
+    "dataNascimento",
+    row.beneficiario_data_nascimento,
+    "beneficiario_data_nascimento",
+  );
+  writer.text(
+    target,
+    "municipioResidencia",
+    row.beneficiario_municipio_residencia,
+    "beneficiario_municipio_residencia",
+  );
+  writer.text(beneficiary, "numeroRegistroPlano", row.plano_registro, "plano_registro");
 }
 
 function appendProcedureIdentification(writer, parent, item, guide) {
   const identification = parent.ele("identProcedimento");
-  writer.text(identification, "codigoTabela", item.procedimento_codigo_tabela);
+  writer.text(
+    identification,
+    "codigoTabela",
+    item.procedimento_codigo_tabela,
+    "procedimento_codigo_tabela",
+  );
   const procedure = identification.ele(guide ? "Procedimento" : "procedimento");
-  if (item.procedimento_grupo) writer.text(procedure, "grupoProcedimento", item.procedimento_grupo);
-  else writer.text(procedure, "codigoProcedimento", item.procedimento_codigo);
+  if (item.procedimento_grupo) {
+    writer.text(procedure, "grupoProcedimento", item.procedimento_grupo, "procedimento_grupo");
+  } else {
+    writer.text(procedure, "codigoProcedimento", item.procedimento_codigo, "procedimento_codigo");
+  }
 }
 
 function appendToothRegion(writer, parent, item) {
   if (!item.dente_codigo && !item.regiao_codigo) return;
   const element = parent.ele("denteRegiao");
-  if (item.dente_codigo) writer.text(element, "codDente", item.dente_codigo);
-  else writer.text(element, "codRegiao", item.regiao_codigo);
+  if (item.dente_codigo) writer.text(element, "codDente", item.dente_codigo, "dente_codigo");
+  else writer.text(element, "codRegiao", item.regiao_codigo, "regiao_codigo");
 }
 
 function parsePipeValues(value) {
@@ -285,17 +365,51 @@ function parsePackageDetails(value) {
   });
 }
 
-function createWriter(hashParts) {
+function createWriter(hashParts, sourceEvents) {
+  let sourceLine;
   return {
-    text(parent, name, rawValue) {
+    withSource(line, callback) {
+      const previous = sourceLine;
+      sourceLine = line;
+      try {
+        return callback();
+      } finally {
+        sourceLine = previous;
+      }
+    },
+    text(parent, name, rawValue, sourceField = xmlNameToCsvField(name)) {
       const value = String(rawValue ?? "");
       assertLatin1(value, name);
       parent.ele(name).txt(value);
       hashParts.push(value);
+      if (sourceLine)
+        sourceEvents.push({ element: name, csvLine: sourceLine, csvField: sourceField });
     },
-    optional(parent, name, rawValue) {
+    optional(parent, name, rawValue, sourceField) {
       if (rawValue === undefined || rawValue === null || rawValue === "") return;
-      this.text(parent, name, rawValue);
+      this.text(parent, name, rawValue, sourceField);
     },
   };
+}
+
+function xmlNameToCsvField(name) {
+  return String(name)
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase();
+}
+
+function buildXmlSourceMap(xml, sourceEvents) {
+  const lines = xml.split(/\r?\n/);
+  const sourceMap = {};
+  let lineIndex = 0;
+
+  for (const event of sourceEvents) {
+    const openingTag = new RegExp(`<${event.element}(?:>|\\s)`);
+    while (lineIndex < lines.length && !openingTag.test(lines[lineIndex])) lineIndex += 1;
+    if (lineIndex >= lines.length) break;
+    sourceMap[lineIndex + 1] = { linha: event.csvLine, campo: event.csvField };
+    lineIndex += 1;
+  }
+  return sourceMap;
 }

@@ -36,10 +36,6 @@ apiRouter.post("/monitoramento/gerar", uploadCsv.single("arquivo"), async (reque
 
 apiRouter.post("/monitoramento/validar", uploadXml.single("arquivo"), async (request, response) => {
   if (!request.file) throw new AppError("Envie o arquivo XTE/XML no campo 'arquivo'.");
-  const declaration = request.file.buffer.subarray(0, 160).toString("ascii");
-  const xml = /encoding=["']ISO-8859-1["']/i.test(declaration)
-    ? request.file.buffer.toString("latin1")
-    : request.file.buffer.toString("utf8");
-  const result = await validateMonitoringFile(xml);
+  const result = await validateMonitoringFile(request.file.buffer);
   response.status(result.isValid ? 200 : 422).json(result);
 });

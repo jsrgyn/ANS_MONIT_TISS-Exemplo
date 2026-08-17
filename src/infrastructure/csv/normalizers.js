@@ -50,15 +50,18 @@ export function normalizeDocument(value) {
 }
 
 export function assertLatin1(value, field = "valor") {
-  for (const character of String(value)) {
-    if (character.codePointAt(0) > 255) {
-      throw new AppError(
-        `O campo '${field}' contém caractere fora de ISO-8859-1: '${character}'.`,
-        {
-          statusCode: 422,
-          code: "CARACTERE_FORA_LATIN1",
-        },
-      );
-    }
+  const character = findNonLatin1Character(value);
+  if (character) {
+    throw new AppError(`O campo '${field}' contém caractere fora de ISO-8859-1: '${character}'.`, {
+      statusCode: 422,
+      code: "CARACTERE_FORA_LATIN1",
+    });
   }
+}
+
+export function findNonLatin1Character(value) {
+  for (const character of String(value ?? "")) {
+    if (character.codePointAt(0) > 255) return character;
+  }
+  return "";
 }

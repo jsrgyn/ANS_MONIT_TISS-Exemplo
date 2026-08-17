@@ -34,11 +34,43 @@ npm run dev
 
 A interface fica em `http://127.0.0.1:3001`.
 
+## Manual de operação
+
+### Gerar e validar um XTE pela interface
+
+1. Execute `npm run dev` e abra `http://127.0.0.1:3001`.
+2. Informe registro ANS (6 dígitos), competência (`AAAAMM`), lote e sequencial.
+3. Selecione o CSV ou marque **sem movimento**.
+4. Clique em **Gerar e validar XTE**. O download só é liberado após validar o CSV,
+   montar o XML na ordem do XSD e aprovar o schema oficial.
+5. Confira no resultado o nome, a quantidade de registros, o hash e o encoding.
+
+Erros de CSV usam a localização `L<linha>:C<coluna>` e o nome da coluna, por exemplo:
+
+```text
+L4:C35 — cbo_executante: valor fora do domínio do XSD 01.06.00
+```
+
+Corrija o CSV na posição indicada e envie-o novamente. O serviço não corrige, completa nem
+descarta dados silenciosamente.
+
+### Validar um XML/XTE de outro sistema
+
+Na seção **Validar um XTE existente**, envie `.XTE` ou `.xml`. O resultado é dividido em três
+verificações independentes:
+
+- encoding declarado e conteúdo compatíveis com `ISO-8859-1`;
+- estrutura, ordem, tipos e domínios válidos no XSD 01.06.00 via libxml2;
+- hash MD5 informado igual ao hash recalculado.
+
+Quando o hash diverge, a tela e a API mostram **hash informado** e **hash calculado correto**.
+Um XML só recebe resultado geral válido quando as três verificações passam.
+
 ## Geração por linha de comando
 
 ```bash
 npm run gerar -- \
-  --csv examples/csv/guia_monitoramento.csv \
+  --csv arq_exemplo/guia_monitoramento_custo_medico.csv \
   --registro-ans 123456 \
   --competencia 202607 \
   --numero-lote LOTE0001 \
@@ -74,6 +106,19 @@ O delimitador é `;`. Datas aceitam `AAAA-MM-DD` ou `DD/MM/AAAA`; decimais aceit
 
 Em guias e fornecimentos, linhas com a mesma `chave_registro` viram um registro XML com vários procedimentos. Todos os campos de cabeçalho devem se repetir com o mesmo valor; apenas as colunas do procedimento podem variar.
 
+O contrato canônico de custo médico é
+[`arq_exemplo/guia_monitoramento_custo_medico.csv`](arq_exemplo/guia_monitoramento_custo_medico.csv).
+Ele é consumido diretamente, sem pré-processamento, e deve permanecer inalterado. O arquivo
+[`examples/csv/guia_monitoramento.csv`](examples/csv/guia_monitoramento.csv) é uma cópia byte a
+byte usada na regressão automatizada. A consulta `sql/select_exportacao_csv.sql` também é uma
+entrada protegida deste fluxo e não é modificada pelo gerador.
+
+Antes de gerar XML, a importação verifica cabeçalho conhecido, campos obrigatórios, domínios,
+tamanhos, datas, competências, decimais, CPF/CNPJ, ISO-8859-1, escolhas exclusivas, listas
+compostas e consistência das linhas agrupadas. Uma falha impede a geração e informa linha,
+coluna e campo. Restrições residuais, como a enumeração extensa de CBO, são verificadas pelo XSD
+e mapeadas de volta à origem no CSV.
+
 Consulte o [layout completo dos CSVs](docs/LAYOUT_CSV.md) e os [arquivos de exemplo](examples/csv).
 
 ## API
@@ -89,11 +134,15 @@ Consulte o [layout completo dos CSVs](docs/LAYOUT_CSV.md) e os [arquivos de exem
 - `sequencial_arquivo`: 4 dígitos;
 - `sem_movimento`: `true` quando aplicável.
 
-A resposta inclui o nome, hash, resultado XSD e o XTE em Base64.
+A resposta inclui o nome, hash, resultado XSD e o XTE ISO-8859-1 em Base64. Falhas de CSV
+retornam HTTP `422`, código `CSV_INVALIDO` e `details[]` com `linha`, `coluna`, `campo`,
+`localizacao` e `mensagem`.
 
 ### `POST /api/v1/monitoramento/validar`
 
-`multipart/form-data` com `arquivo` `.XTE` ou `.xml`. Retorna separadamente o resultado do XSD e do hash.
+`multipart/form-data` com `arquivo` `.XTE` ou `.xml`. Retorna `encoding`, `xsd` e `hash`. Em
+`hash`, `informed` preserva o valor do arquivo e `calculated` informa o MD5 correto; o status é
+HTTP `200` somente para resultado geral válido e `422` para qualquer divergência.
 
 ### `GET /api/v1/health`
 
@@ -134,5 +183,11 @@ npm run test:coverage
 - limite padrão de 25 MiB;
 - sem log do CSV, XML ou dados de beneficiários;
 - resposta XTE realmente codificada em ISO-8859-1;
-- erro por linha/campo antes de gerar o XML;
-- XSD e hash conferidos de forma independente.
+- erro por linha/coluna/campo antes de gerar o XML;
+- encoding, XSD e hash conferidos de forma independente;
+- upload em memória de XML externo com hash informado e recalculado no resultado.
+
+O hash segue a regra organizacional da ANS: MD5 da concatenação literal dos valores dos
+elementos-folha, da esquerda para a direita, sem nomes de tags/atributos e sem o epílogo, usando
+bytes ISO-8859-1. Espaços, maiúsculas, acentos e caracteres de controle presentes nos valores
+não podem ser ajustados durante o cálculo.

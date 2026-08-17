@@ -1,2 +1,2 @@
 tipo_bloco;chave_registro;tipo_registro;data_processamento;recebedor_tipo_identificacao;recebedor_cpf_cnpj;valor_total_informado;valor_total_glosa;valor_total_pago
-outra_remuneracao;REM-202607-0001;1;2026-07-31;1;12345678000195;1500,00;0,00;1500,00
+outra_remuneracao;REM-202607-0001;1;2026-07-31;1;12345678000195;1500.00;0.00;1500.00

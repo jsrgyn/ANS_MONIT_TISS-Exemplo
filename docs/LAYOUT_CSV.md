@@ -10,9 +10,29 @@
 - decimais: `1234.56` ou `1234,56`, sem separador de milhar;
 - `tipo_registro`: `1` inclusão, `2` alteração, `3` exclusão;
 - cada CSV deve conter apenas um `tipo_bloco`;
+- colunas desconhecidas são rejeitadas para detectar erros de digitação no cabeçalho;
 - uma `chave_registro` não é enviada ao XML; ela serve apenas para agrupar linhas.
 
 Os cabeçalhos completos e a ordem recomendada estão nos CSVs de [`examples/csv`](../examples/csv).
+Para `guia`, o contrato de referência é
+[`arq_exemplo/guia_monitoramento_custo_medico.csv`](../arq_exemplo/guia_monitoramento_custo_medico.csv),
+mantido byte a byte em `examples/csv/guia_monitoramento.csv`. A rotina e os testes adaptam-se a
+esse contrato; o arquivo de referência e `sql/select_exportacao_csv.sql` não devem ser alterados.
+
+## Como os erros são apresentados
+
+A validação ocorre antes da geração e acumula todas as inconsistências detectáveis. Cada item
+informa `linha`, `coluna`, `campo`, `localizacao` (`L2:C5`) e `mensagem`. O valor bruto não é
+incluído nos logs, evitando exposição de dados assistenciais. São conferidos:
+
+- quantidade e nomes das colunas, campos obrigatórios e um único bloco por arquivo;
+- datas reais, mês da competência, inteiros e limites decimais `10,2`/`12,4`;
+- tamanhos, padrões e domínios enumerados do XSD;
+- CPF/CNPJ, inclusive CNPJ alfanumérico, e compatibilidade ISO-8859-1;
+- escolhas mutuamente exclusivas, listas com `|`/`:` e repetição coerente do registro-pai.
+
+Após essas regras, o XML provisório é validado pelo XSD. Se uma restrição residual falhar, a
+linha do XML é correlacionada à linha e ao campo de origem no CSV.
 
 ## `guia`
 
@@ -36,6 +56,10 @@ diagnosticos_cid10 = A00|B20
 declaracoes_nascido = DN001|DN002
 detalhes_pacote = 22:10101012:1.0000:036|19:12345678:2.0000:036
 ```
+
+`formas_remuneracao` aceita códigos `01` a `07`; diagnósticos aceitam até 4 itens; declarações
+de nascido/óbito, até 8. Em `detalhes_pacote`, a tabela deve ser `18`, `19`, `20` ou `22` e a
+unidade, quando informada, deve pertencer ao domínio `001` a `061` do XSD.
 
 Para origem `1`, `2` ou `3`, `identificacao_reembolso` deve conter 20 zeros. Para origem `4` ou `5`, deve conter o identificador real.
 

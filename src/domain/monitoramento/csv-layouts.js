@@ -2,6 +2,86 @@ import { BLOCK_TYPES } from "./constants.js";
 
 const common = ["tipo_bloco", "chave_registro", "tipo_registro"];
 
+const guideColumns = [
+  ...common,
+  "versao_tiss_prestador",
+  "forma_envio",
+  "executante_cnes",
+  "executante_tipo_identificacao",
+  "executante_cpf_cnpj",
+  "executante_municipio",
+  "operadora_intermediaria_registro",
+  "operadora_intermediaria_tipo_atendimento",
+  "beneficiario_cns",
+  "beneficiario_cpf",
+  "beneficiario_sexo",
+  "beneficiario_data_nascimento",
+  "beneficiario_municipio_residencia",
+  "plano_registro",
+  "tipo_evento_atencao",
+  "origem_evento_atencao",
+  "numero_guia_prestador",
+  "numero_guia_operadora",
+  "identificacao_reembolso",
+  "identificacao_valor_preestabelecido",
+  "formas_remuneracao",
+  "guia_solicitacao_internacao",
+  "data_solicitacao",
+  "numero_guia_spsadt_principal",
+  "data_autorizacao",
+  "data_realizacao",
+  "data_inicial_faturamento",
+  "data_fim_periodo",
+  "data_protocolo_cobranca",
+  "data_pagamento",
+  "data_processamento_guia",
+  "tipo_consulta",
+  "cbo_executante",
+  "indicacao_recem_nato",
+  "indicacao_acidente",
+  "carater_atendimento",
+  "tipo_internacao",
+  "regime_internacao",
+  "diagnosticos_cid10",
+  "tipo_atendimento",
+  "regime_atendimento",
+  "saude_ocupacional",
+  "tipo_faturamento",
+  "diarias_acompanhante",
+  "diarias_uti",
+  "motivo_saida",
+  "valor_total_informado",
+  "valor_processado",
+  "valor_total_pago_procedimentos",
+  "valor_total_diarias",
+  "valor_total_taxas",
+  "valor_total_materiais",
+  "valor_total_opme",
+  "valor_total_medicamentos",
+  "valor_glosa_guia",
+  "valor_pago_guia",
+  "valor_pago_fornecedores",
+  "valor_total_tabela_propria",
+  "valor_total_coparticipacao",
+  "declaracoes_nascido",
+  "declaracoes_obito",
+  "procedimento_codigo_tabela",
+  "procedimento_grupo",
+  "procedimento_codigo",
+  "dente_codigo",
+  "regiao_codigo",
+  "dente_face",
+  "quantidade_informada",
+  "valor_informado",
+  "quantidade_paga",
+  "unidade_medida",
+  "valor_pago_procedimento",
+  "valor_pago_fornecedor",
+  "fornecedor_cnpj",
+  "valor_coparticipacao_procedimento",
+  "detalhes_pacote",
+];
+
 const guideBase = [
   ...common,
   "forma_envio",
@@ -77,8 +157,38 @@ const directSupplyItem = [
   "valor_coparticipacao_procedimento",
 ];
 
+const directSupplyColumns = [
+  ...directSupplyBase,
+  "beneficiario_cns",
+  "beneficiario_cpf",
+  ...directSupplyItem,
+];
+
+const otherRemunerationColumns = [
+  ...common,
+  "data_processamento",
+  "recebedor_tipo_identificacao",
+  "recebedor_cpf_cnpj",
+  "valor_total_informado",
+  "valor_total_glosa",
+  "valor_total_pago",
+];
+
+const preestablishedValueColumns = [
+  ...common,
+  "competencia_cobertura",
+  "prestador_cnes",
+  "prestador_tipo_identificacao",
+  "prestador_cpf_cnpj",
+  "prestador_municipio",
+  "operadora_intermediaria_registro",
+  "identificacao_valor_preestabelecido",
+  "valor_preestabelecido",
+];
+
 export const CSV_LAYOUTS = Object.freeze({
   [BLOCK_TYPES.GUIA]: {
+    columns: guideColumns,
     required: [
       ...guideBase,
       ...guideItem.filter(
@@ -98,6 +208,7 @@ export const CSV_LAYOUTS = Object.freeze({
     itemFields: guideItem,
   },
   [BLOCK_TYPES.FORNECIMENTO_DIRETO]: {
+    columns: directSupplyColumns,
     required: [
       ...directSupplyBase,
       ...directSupplyItem.filter(
@@ -107,6 +218,7 @@ export const CSV_LAYOUTS = Object.freeze({
     itemFields: directSupplyItem,
   },
   [BLOCK_TYPES.OUTRA_REMUNERACAO]: {
+    columns: otherRemunerationColumns,
     required: [
       ...common,
       "data_processamento",
@@ -119,6 +231,7 @@ export const CSV_LAYOUTS = Object.freeze({
     itemFields: [],
   },
   [BLOCK_TYPES.VALOR_PREESTABELECIDO]: {
+    columns: preestablishedValueColumns,
     required: [
       ...common,
       "competencia_cobertura",
@@ -178,3 +291,103 @@ export const DOCUMENT_FIELDS = new Set([
   "recebedor_cpf_cnpj",
   "prestador_cpf_cnpj",
 ]);
+
+export const ENUM_FIELDS = Object.freeze({
+  tipo_registro: ["1", "2", "3"],
+  versao_tiss_prestador: Array.from({ length: 27 }, (_, index) =>
+    String(index + 1).padStart(3, "0"),
+  ),
+  forma_envio: ["1", "2", "3", "4"],
+  executante_tipo_identificacao: ["1", "2"],
+  operadora_intermediaria_tipo_atendimento: ["1", "2"],
+  beneficiario_sexo: ["1", "3"],
+  tipo_evento_atencao: ["1", "2", "3", "4", "5"],
+  origem_evento_atencao: ["1", "2", "3", "4", "5"],
+  indicacao_recem_nato: ["S", "N"],
+  indicacao_acidente: ["0", "1", "2", "9"],
+  carater_atendimento: ["1", "2", "E", "U"],
+  tipo_internacao: ["1", "2", "3", "4", "5", "6", "7"],
+  regime_internacao: ["1", "2", "3"],
+  tipo_atendimento: [
+    "01",
+    "02",
+    "03",
+    "04",
+    "05",
+    "06",
+    "07",
+    "08",
+    "09",
+    "10",
+    "11",
+    "13",
+    "14",
+    "15",
+    "16",
+    "17",
+    "18",
+    "19",
+    "20",
+    "21",
+    "22",
+    "23",
+  ],
+  regime_atendimento: ["01", "02", "03", "04", "05"],
+  saude_ocupacional: ["01", "02", "03", "04", "05", "06"],
+  tipo_faturamento: ["1", "2", "3", "4", "F", "T", "P"],
+  procedimento_codigo_tabela: ["18", "19", "20", "22", "63", "90", "98", "00"],
+  unidade_medida: Array.from({ length: 61 }, (_, index) => String(index + 1).padStart(3, "0")),
+  recebedor_tipo_identificacao: ["1", "2"],
+  prestador_tipo_identificacao: ["1", "2"],
+});
+
+export const TEXT_MAX_LENGTHS = Object.freeze({
+  executante_cnes: 7,
+  executante_municipio: 7,
+  beneficiario_cns: 15,
+  beneficiario_municipio_residencia: 7,
+  plano_registro: 20,
+  numero_guia_prestador: 20,
+  numero_guia_operadora: 20,
+  identificacao_reembolso: 20,
+  identificacao_valor_preestabelecido: 20,
+  guia_solicitacao_internacao: 20,
+  numero_guia_spsadt_principal: 20,
+  tipo_consulta: 1,
+  diarias_acompanhante: 3,
+  diarias_uti: 3,
+  motivo_saida: 2,
+  procedimento_grupo: 3,
+  procedimento_codigo: 10,
+  dente_face: 5,
+  identificacao_fornecimento_direto: 20,
+  prestador_cnes: 7,
+  prestador_municipio: 7,
+});
+
+export const DIGIT_FIELDS = Object.freeze({
+  executante_cnes: { min: 1, max: 7 },
+  executante_municipio: { min: 1, max: 7 },
+  operadora_intermediaria_registro: { min: 6, max: 6 },
+  beneficiario_cns: { min: 1, max: 15 },
+  beneficiario_municipio_residencia: { min: 1, max: 7 },
+  prestador_cnes: { min: 1, max: 7 },
+  prestador_municipio: { min: 1, max: 7 },
+});
+
+export const INTEGER_FIELDS = Object.freeze({
+  diarias_acompanhante: 3,
+  diarias_uti: 3,
+  quantidade_fornecida: 8,
+});
+
+export const DECIMAL_FIELD_RULES = Object.freeze(
+  Object.fromEntries(
+    [...DECIMAL_FIELDS].map((field) => [
+      field,
+      ["quantidade_informada", "quantidade_paga"].includes(field)
+        ? { totalDigits: 12, fractionDigits: 4 }
+        : { totalDigits: 10, fractionDigits: 2 },
+    ]),
+  ),
+);

@@ -17,15 +17,16 @@ if (values.ajuda || values.help) {
 } else {
   try {
     const buffer = await fs.readFile(positionals[0]);
-    const declaration = buffer.subarray(0, 160).toString("ascii");
-    const xml = /encoding=["']ISO-8859-1["']/i.test(declaration)
-      ? buffer.toString("latin1")
-      : buffer.toString("utf8");
-    const result = await validateMonitoringFile(xml);
+    const result = await validateMonitoringFile(buffer);
 
     if (result.isValid) {
-      console.info(`XML válido no XSD ${result.xsd.schemaVersion}; hash MD5 confere.`);
+      console.info(
+        `XML válido no XSD ${result.xsd.schemaVersion}; encoding ${result.encoding.expected} e hash MD5 conferem.`,
+      );
     } else {
+      if (!result.encoding.isValid) {
+        for (const error of result.encoding.errors) console.error(error.formatted);
+      }
       if (!result.xsd.isValid) {
         for (const error of result.xsd.errors) console.error(error.formatted);
       }

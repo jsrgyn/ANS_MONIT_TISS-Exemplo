@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import request from "supertest";
 import { createApp } from "../src/interfaces/http/app.js";
+import { generateMonitoringFile } from "../src/application/generate-monitoring-file.js";
 
 const app = createApp();
 
@@ -49,4 +50,52 @@ test("API devolve 422 e detalhes por linha para CSV inválido", async () => {
 
   assert.equal(response.body.code, "CSV_INVALIDO");
   assert.ok(response.body.details.length > 0);
+});
+
+test("API valida upload XTE e retorna encoding, XSD e hashes", async () => {
+  const generated = await generateMonitoringFile({
+    noMovement: true,
+    metadata: {
+      registroAns: "123456",
+      competencia: "202607",
+      numeroLote: "LOTE0001",
+      sequencialArquivo: "0001",
+    },
+    now: new Date("2026-08-09T10:30:00-03:00"),
+  });
+
+  const response = await request(app)
+    .post("/api/v1/monitoramento/validar")
+    .attach("arquivo", generated.buffer, "monitoramento.XTE")
+    .expect(200);
+
+  assert.equal(response.body.isValid, true);
+  assert.equal(response.body.encoding.isValid, true);
+  assert.equal(response.body.xsd.isValid, true);
+  assert.equal(response.body.hash.informed, generated.hash);
+  assert.equal(response.body.hash.calculated, generated.hash);
+});
+
+test("API retorna 422 com hash informado e hash correto", async () => {
+  const generated = await generateMonitoringFile({
+    noMovement: true,
+    metadata: {
+      registroAns: "123456",
+      competencia: "202607",
+      numeroLote: "LOTE0001",
+      sequencialArquivo: "0001",
+    },
+    now: new Date("2026-08-09T10:30:00-03:00"),
+  });
+  const informed = "0".repeat(32);
+  const tampered = Buffer.from(generated.xml.replace(generated.hash, informed), "latin1");
+
+  const response = await request(app)
+    .post("/api/v1/monitoramento/validar")
+    .attach("arquivo", tampered, "monitoramento.XTE")
+    .expect(422);
+
+  assert.equal(response.body.isValid, false);
+  assert.equal(response.body.hash.informed, informed);
+  assert.equal(response.body.hash.calculated, generated.hash);
 });

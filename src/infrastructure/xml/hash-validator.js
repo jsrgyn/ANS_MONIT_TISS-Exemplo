@@ -7,7 +7,7 @@ export function validateMonitoringHash(xml) {
     const document = create(xml).node;
     const root = document.documentElement;
     const hashElements = root.getElementsByTagNameNS("*", "hash");
-    const informed = hashElements.item(0)?.textContent ?? "";
+    const informed = (hashElements.item(0)?.textContent ?? "").trim();
     const content = concatenateLeafValues(root);
     assertLatin1(content, "conteudo_hash");
     const calculated = crypto
@@ -16,12 +16,23 @@ export function validateMonitoringHash(xml) {
       .digest("hex")
       .toUpperCase();
 
+    const hasSingleHash = hashElements.length === 1;
+    const hasValidFormat = /^[A-F0-9]{32}$/i.test(informed);
+    const isValid = hasSingleHash && hasValidFormat && informed.toUpperCase() === calculated;
     return {
-      isValid: informed.toUpperCase() === calculated,
+      isValid,
       informed,
       calculated,
       algorithm: "MD5",
       encoding: "ISO-8859-1",
+      hasValidFormat,
+      message: isValid
+        ? "O hash informado confere com o conteúdo do XML."
+        : !hasSingleHash
+          ? `O XML deve possuir exatamente um elemento hash; encontrados: ${hashElements.length}.`
+          : !hasValidFormat
+            ? "O hash informado deve conter 32 caracteres hexadecimais."
+            : "O hash informado diverge do MD5 calculado para os valores do XML.",
     };
   } catch (error) {
     return {
@@ -30,6 +41,8 @@ export function validateMonitoringHash(xml) {
       calculated: "",
       algorithm: "MD5",
       encoding: "ISO-8859-1",
+      hasValidFormat: false,
+      message: `Não foi possível calcular o hash: ${error.message}`,
       error: error.message,
     };
   }

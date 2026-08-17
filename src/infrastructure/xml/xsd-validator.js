@@ -71,13 +71,21 @@ async function loadSchemas() {
 
 function formatError(error) {
   const line = error.loc?.lineNumber ?? 0;
+  const column = error.loc?.columnNumber ?? error.loc?.column ?? 0;
   const message = String(error.message ?? error.rawMessage ?? "Erro de validação")
     .replace(/^.*?Schemas validity error\s*:\s*/i, "")
     .trim();
   return {
     line,
-    column: 0,
+    column,
     message,
-    formatted: `[XSD] Linha ${line || "?"}: ${message}`,
+    element: extractElementName(message),
+    severity: "error",
+    formatted: `[XSD] Linha ${line || "?"}, coluna ${column || "?"}: ${message}`,
   };
+}
+
+function extractElementName(message) {
+  const qualified = /Element ['"]\{[^}]+\}([^'"]+)['"]/.exec(message)?.[1];
+  return qualified ?? /Element ['"]([^'"]+)['"]/.exec(message)?.[1] ?? "";
 }

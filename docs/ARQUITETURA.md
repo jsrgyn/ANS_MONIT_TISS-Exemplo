@@ -18,7 +18,7 @@ modelo do bloco TISS
 XML na ordem exata do XSD -> hash MD5 dos valores -> epílogo
       |
       v
-libxml2 + XSD 01.06.00
+libxml2 + XSD 01.06.00 + mapa XML -> linha/campo CSV
       |
       v
 REGANSAAAAMM9999.XTE (ISO-8859-1)
@@ -42,9 +42,22 @@ No XSD, `operadoraParaANS` é um `choice`: o arquivo contém guias, fornecimento
 
 Guias e fornecimentos possuem procedimentos repetíveis. A coluna `chave_registro` identifica o pai. Linhas com a mesma chave são agrupadas; os dados do pai precisam ser idênticos e as colunas de procedimento formam a lista.
 
+### Defesa em duas camadas
+
+O importador espelha as restrições determinísticas do XSD para falhar cedo com
+`CSV:L<linha>:C<coluna>`. O gerador também registra a origem de cada elemento-folha. Assim, uma
+falha encontrada somente pelo libxml2, como um CBO fora da enumeração oficial, é relacionada ao
+campo original sem inserir atributos de rastreamento no XML final.
+
 ### Hash
 
 O hash usa a concatenação literal dos valores dos elementos, na ordem do XML, sem nomes de tags ou atributos e sem o epílogo. A codificação da entrada do MD5 é ISO-8859-1. O validador de hash percorre apenas elementos-folha, ignorando a indentação entre tags.
+
+### Validação de arquivo externo
+
+O upload entrega os bytes em memória ao `xml-decoder`. A declaração/BOM e a possibilidade de
+representação em ISO-8859-1 são avaliadas antes de XSD e hash. Os três resultados permanecem
+separados para distinguir erro de transporte, erro estrutural e alteração de conteúdo.
 
 ### Privacidade
 

@@ -8,7 +8,12 @@ import {
   CSV_LAYOUTS,
   DATE_FIELDS,
   DECIMAL_FIELDS,
+  DECIMAL_FIELD_RULES,
+  DIGIT_FIELDS,
   DOCUMENT_FIELDS,
+  ENUM_FIELDS,
+  INTEGER_FIELDS,
+  TEXT_MAX_LENGTHS,
 } from "../../domain/monitoramento/csv-layouts.js";
 import { isValidCnpj, isValidCpf } from "../../domain/monitoramento/tax-identifiers.js";
 import { CsvValidationError } from "../../shared/errors.js";
@@ -19,6 +24,7 @@ import {
   normalizeDecimal,
   normalizeDocument,
   normalizeHeader,
+  findNonLatin1Character,
 } from "./normalizers.js";
 
 const VALID_BLOCK_TYPES = new Set(Object.values(BLOCK_TYPES));
@@ -44,7 +50,12 @@ export function parseMonitoringCsv(buffer) {
     });
   } catch (error) {
     throw new CsvValidationError("Não foi possível interpretar o CSV.", [
-      { linha: error.lines ?? 0, campo: "-", mensagem: error.message },
+      {
+        linha: error.lines ?? 0,
+        coluna: Number(error.column) || 0,
+        campo: typeof error.column === "string" ? error.column : "-",
+        mensagem: error.message,
+      },
     ]);
   }
 
@@ -54,32 +65,53 @@ export function parseMonitoringCsv(buffer) {
 
   const duplicateHeaders = headers.filter((header, index) => headers.indexOf(header) !== index);
   if (duplicateHeaders.length > 0) {
-    throw new CsvValidationError("O CSV possui cabeçalhos duplicados.", [
-      { linha: 1, campo: duplicateHeaders[0], mensagem: "Cabeçalho duplicado após normalização." },
-    ]);
+    throwCsvValidation(
+      "O CSV possui cabeçalhos duplicados.",
+      [
+        {
+          linha: 1,
+          campo: duplicateHeaders[0],
+          mensagem: "Cabeçalho duplicado após normalização.",
+        },
+      ],
+      headers,
+    );
   }
 
   const blockTypes = new Set(rows.map((row) => row.tipo_bloco));
   if (blockTypes.size !== 1 || !VALID_BLOCK_TYPES.has([...blockTypes][0])) {
-    throw new CsvValidationError("Cada CSV deve conter exatamente um tipo de bloco suportado.", [
-      {
-        linha: 1,
-        campo: "tipo_bloco",
-        mensagem: `Use apenas um destes valores: ${[...VALID_BLOCK_TYPES].join(", ")}.`,
-      },
-    ]);
+    throwCsvValidation(
+      "Cada CSV deve conter exatamente um tipo de bloco suportado.",
+      [
+        {
+          linha: 1,
+          campo: "tipo_bloco",
+          mensagem: `Use apenas um destes valores: ${[...VALID_BLOCK_TYPES].join(", ")}.`,
+        },
+      ],
+      headers,
+    );
   }
 
   const blockType = [...blockTypes][0];
   const layout = CSV_LAYOUTS[blockType];
-  const headerErrors = layout.required
+  const missingHeaderErrors = layout.required
     .filter((field) => !headers.includes(field))
     .map((field) => ({ linha: 1, campo: field, mensagem: "Coluna obrigatória ausente." }));
+  const unknownHeaderErrors = headers
+    .filter((field) => !layout.columns.includes(field))
+    .map((field) => ({
+      linha: 1,
+      campo: field,
+      mensagem: `Coluna não reconhecida no layout '${blockType}'. Corrija o cabeçalho ou remova-a.`,
+    }));
+  const headerErrors = [...missingHeaderErrors, ...unknownHeaderErrors];
 
   if (headerErrors.length > 0) {
-    throw new CsvValidationError(
+    throwCsvValidation(
       "O cabeçalho do CSV não atende ao layout selecionado.",
       headerErrors,
+      headers,
     );
   }
 
@@ -95,12 +127,13 @@ export function parseMonitoringCsv(buffer) {
     }
 
     validateCommonFields(normalized, line, errors);
+    validateSchemaFields(blockType, normalized, line, errors);
     validateBlockFields(blockType, normalized, line, errors);
     return { ...normalized, _linha: line };
   });
 
   if (errors.length > 0) {
-    throw new CsvValidationError("Foram encontrados erros nos dados do CSV.", errors);
+    throwCsvValidation("Foram encontrados erros nos dados do CSV.", errors, headers);
   }
 
   const records = groupRows(normalizedRows, layout.itemFields, errors);
@@ -113,10 +146,15 @@ export function parseMonitoringCsv(buffer) {
   }
 
   if (errors.length > 0) {
-    throw new CsvValidationError("Não foi possível agrupar os registros do CSV.", errors);
+    throwCsvValidation("Não foi possível agrupar os registros do CSV.", errors, headers);
   }
 
-  return { blockType, records, rowsRead: rows.length };
+  return {
+    blockType,
+    records,
+    rowsRead: rows.length,
+    fieldColumns: Object.fromEntries(headers.map((field, index) => [field, index + 1])),
+  };
 }
 
 function normalizeRow(row) {
@@ -133,14 +171,6 @@ function normalizeRow(row) {
 }
 
 function validateCommonFields(row, line, errors) {
-  if (row.tipo_registro && !["1", "2", "3"].includes(row.tipo_registro)) {
-    errors.push({
-      linha: line,
-      campo: "tipo_registro",
-      mensagem: "Use 1 (inclusão), 2 (alteração) ou 3 (exclusão).",
-    });
-  }
-
   for (const field of DATE_FIELDS) {
     if (!row[field]) continue;
     if (!DATE_PATTERN.test(row[field]) || !isValidCalendarDate(row[field])) {
@@ -154,17 +184,21 @@ function validateCommonFields(row, line, errors) {
 
   for (const field of DECIMAL_FIELDS) {
     if (!row[field]) continue;
-    if (!DECIMAL_PATTERN.test(row[field])) {
+    if (
+      !DECIMAL_PATTERN.test(row[field]) ||
+      !fitsDecimalRule(row[field], DECIMAL_FIELD_RULES[field])
+    ) {
+      const rule = DECIMAL_FIELD_RULES[field];
       errors.push({
         linha: line,
         campo: field,
-        mensagem: "Valor numérico inválido; não use separador de milhar.",
+        mensagem: `Decimal inválido; use até ${rule.totalDigits} dígitos no total e ${rule.fractionDigits} casas, sem milhar ou sinal.`,
       });
     }
   }
 
   for (const [field, value] of Object.entries(row)) {
-    if (field.includes("competencia") && value && !/^\d{6}$/.test(value)) {
+    if (field.includes("competencia") && value && !isValidCompetence(value)) {
       errors.push({
         linha: line,
         campo: field,
@@ -187,6 +221,209 @@ function validateCommonFields(row, line, errors) {
       mensagem: "CNPJ com dígitos verificadores inválidos.",
     });
   }
+
+  for (const [field, value] of Object.entries(row)) {
+    const invalidCharacter = value && findNonLatin1Character(value);
+    if (invalidCharacter) {
+      errors.push({
+        linha: line,
+        campo: field,
+        mensagem: `Caractere '${invalidCharacter}' não pode ser representado em ISO-8859-1.`,
+      });
+    }
+  }
+}
+
+function validateSchemaFields(blockType, row, line, errors) {
+  for (const [field, allowed] of Object.entries(ENUM_FIELDS)) {
+    if (!row[field] || !Object.hasOwn(row, field) || allowed.includes(row[field])) continue;
+    errors.push({
+      linha: line,
+      campo: field,
+      mensagem: `Valor fora do domínio do XSD 01.06.00. Valores aceitos: ${allowed.join(", ")}.`,
+    });
+  }
+
+  for (const [field, maxLength] of Object.entries(TEXT_MAX_LENGTHS)) {
+    if (!row[field] || row[field].length <= maxLength) continue;
+    errors.push({
+      linha: line,
+      campo: field,
+      mensagem: `O XSD permite no máximo ${maxLength} caractere(s).`,
+    });
+  }
+
+  for (const [field, limits] of Object.entries(DIGIT_FIELDS)) {
+    if (!row[field]) continue;
+    const expression = new RegExp(`^\\d{${limits.min},${limits.max}}$`);
+    if (!expression.test(row[field])) {
+      errors.push({
+        linha: line,
+        campo: field,
+        mensagem:
+          limits.min === limits.max
+            ? `Informe exatamente ${limits.min} dígitos.`
+            : `Informe somente dígitos, entre ${limits.min} e ${limits.max} posições.`,
+      });
+    }
+  }
+
+  for (const [field, maxDigits] of Object.entries(INTEGER_FIELDS)) {
+    if (!row[field] || new RegExp(`^\\d{1,${maxDigits}}$`).test(row[field])) continue;
+    errors.push({
+      linha: line,
+      campo: field,
+      mensagem: `Informe um inteiro não negativo com até ${maxDigits} dígitos.`,
+    });
+  }
+
+  if (row.procedimento_grupo && !/^\d{3}$/.test(row.procedimento_grupo)) {
+    errors.push({
+      linha: line,
+      campo: "procedimento_grupo",
+      mensagem: "O grupo de procedimento deve conter exatamente 3 dígitos.",
+    });
+  }
+  if (
+    blockType === BLOCK_TYPES.FORNECIMENTO_DIRETO &&
+    row.procedimento_codigo &&
+    !/^[A-Z0-9]{1,10}$/i.test(row.procedimento_codigo)
+  ) {
+    errors.push({
+      linha: line,
+      campo: "procedimento_codigo",
+      mensagem: "Use de 1 a 10 caracteres alfanuméricos.",
+    });
+  }
+
+  validateStructuredLists(row, line, errors);
+
+  if (row.operadora_intermediaria_tipo_atendimento && !row.operadora_intermediaria_registro) {
+    errors.push({
+      linha: line,
+      campo: "operadora_intermediaria_tipo_atendimento",
+      mensagem: "O tipo de atendimento exige o registro da operadora intermediária.",
+    });
+  }
+
+  if (
+    row.data_inicial_faturamento &&
+    row.data_fim_periodo &&
+    row.data_inicial_faturamento > row.data_fim_periodo
+  ) {
+    errors.push({
+      linha: line,
+      campo: "data_fim_periodo",
+      mensagem: "A data final não pode ser anterior à data inicial de faturamento.",
+    });
+  }
+
+  if (
+    blockType === BLOCK_TYPES.FORNECIMENTO_DIRETO &&
+    row.beneficiario_data_nascimento &&
+    row.beneficiario_data_nascimento < "1850-01-01"
+  ) {
+    errors.push({
+      linha: line,
+      campo: "beneficiario_data_nascimento",
+      mensagem: "O XSD exige data igual ou posterior a 1850-01-01 neste bloco.",
+    });
+  }
+}
+
+function validateStructuredLists(row, line, errors) {
+  validateSimpleList(row.diagnosticos_cid10, {
+    field: "diagnosticos_cid10",
+    line,
+    errors,
+    maxItems: 4,
+    itemPattern: /^[A-Z0-9]{1,4}$/i,
+    description: "CID com 1 a 4 caracteres alfanuméricos",
+  });
+  for (const field of ["declaracoes_nascido", "declaracoes_obito"]) {
+    validateSimpleList(row[field], {
+      field,
+      line,
+      errors,
+      maxItems: 8,
+      itemPattern: /^[A-Z0-9]{1,11}$/i,
+      description: "identificador com 1 a 11 caracteres alfanuméricos",
+    });
+  }
+
+  for (const item of splitList(row.formas_remuneracao)) {
+    const parts = item.split(":");
+    const value = normalizeDecimal(parts[1]);
+    if (
+      parts.length !== 2 ||
+      !["01", "02", "03", "04", "05", "06", "07"].includes(parts[0]) ||
+      !DECIMAL_PATTERN.test(value) ||
+      !fitsDecimalRule(value, { totalDigits: 10, fractionDigits: 2 })
+    ) {
+      errors.push({
+        linha: line,
+        campo: "formas_remuneracao",
+        mensagem: `Item '${item}' inválido. Use CODIGO:VALOR, com código de 01 a 07 e decimal 10,2.`,
+      });
+    }
+  }
+
+  for (const item of splitList(row.detalhes_pacote)) {
+    const parts = item.split(":");
+    const quantity = normalizeDecimal(parts[2]);
+    const unit = parts[3] ?? "";
+    if (
+      ![3, 4].includes(parts.length) ||
+      !["18", "19", "20", "22"].includes(parts[0]) ||
+      !/^[A-Z0-9]{1,10}$/i.test(parts[1] ?? "") ||
+      !DECIMAL_PATTERN.test(quantity) ||
+      !fitsDecimalRule(quantity, { totalDigits: 12, fractionDigits: 4 }) ||
+      (unit && !ENUM_FIELDS.unidade_medida.includes(unit))
+    ) {
+      errors.push({
+        linha: line,
+        campo: "detalhes_pacote",
+        mensagem: `Item '${item}' inválido. Use TABELA:CODIGO:QUANTIDADE[:UNIDADE] conforme o XSD.`,
+      });
+    }
+  }
+}
+
+function validateSimpleList(value, options) {
+  const items = splitList(value);
+  if (items.length > options.maxItems) {
+    options.errors.push({
+      linha: options.line,
+      campo: options.field,
+      mensagem: `O XSD aceita no máximo ${options.maxItems} item(ns) separados por '|'.`,
+    });
+  }
+  if (items.some((item) => !options.itemPattern.test(item))) {
+    options.errors.push({
+      linha: options.line,
+      campo: options.field,
+      mensagem: `Lista inválida; cada item deve ser ${options.description}.`,
+    });
+  }
+}
+
+function splitList(value) {
+  return String(value ?? "")
+    .split("|")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function fitsDecimalRule(value, rule) {
+  if (!rule || !DECIMAL_PATTERN.test(value)) return false;
+  const [integer, fraction = ""] = value.split(".");
+  const significantInteger = integer.replace(/^0+/, "");
+  const totalDigits = (significantInteger || "0").length + fraction.length;
+  return fraction.length <= rule.fractionDigits && totalDigits <= rule.totalDigits;
+}
+
+function isValidCompetence(value) {
+  return /^\d{6}$/.test(value) && Number(value.slice(4)) >= 1 && Number(value.slice(4)) <= 12;
 }
 
 function isValidCalendarDate(value) {
@@ -300,6 +537,7 @@ function validateExclusiveChoice(row, line, errors, first, second, required) {
 
 function validateIdentifier(type, value, line, field, errors) {
   if (!type || !value) return;
+  if (!["1", "2"].includes(type)) return;
   const expected = type === "1" ? /^[A-Z0-9]{12}\d{2}$/ : /^\d{11}$/;
   if (!expected.test(value)) {
     errors.push({
@@ -361,9 +599,25 @@ function groupRows(rows, itemFields, errors) {
 
     const base = Object.fromEntries(Object.entries(first).filter(([field]) => !ignored.has(field)));
     const items = groupedRows.map((row) =>
-      Object.fromEntries(itemFields.map((field) => [field, row[field] ?? ""])),
+      Object.fromEntries([
+        ...itemFields.map((field) => [field, row[field] ?? ""]),
+        ["sourceLine", row._linha],
+      ]),
     );
     records.push({ ...base, items, sourceLines: groupedRows.map((row) => row._linha) });
   }
   return records;
+}
+
+function throwCsvValidation(message, errors, headers) {
+  const details = errors.map((error) => {
+    const headerIndex = headers.indexOf(error.campo);
+    const column = error.coluna || (headerIndex >= 0 ? headerIndex + 1 : 0);
+    return {
+      ...error,
+      coluna: column,
+      localizacao: `L${error.linha || "?"}:C${column || "?"}`,
+    };
+  });
+  throw new CsvValidationError(message, details);
 }

@@ -64,9 +64,13 @@
 
       <section class="card compact">
         <h2>Validar um XTE existente</h2>
+        <p>
+          Faça upload de um arquivo externo para conferir encoding ISO-8859-1, estrutura no XSD
+          oficial e hash informado versus hash recalculado.
+        </p>
         <form id="validator-form" class="inline">
           <input name="arquivo" type="file" accept=".xte,.xml,application/xml,text/xml" required />
-          <button type="submit" class="secondary">Validar XSD e hash</button>
+          <button type="submit" class="secondary">Validar encoding, XSD e hash</button>
         </form>
       </section>
 

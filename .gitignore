@@ -1,3 +1,7 @@
+# Meus Arquivos e Pastas Ignorados
+claude/
+docs/modelagem_sys/
+
 # Dependências
 node_modules/
 
