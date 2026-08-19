@@ -282,6 +282,8 @@ contas_periodo AS (
         cm.dt_fim_analise,                      -- ✅
         cm.dt_pagamento,                        -- ✅
         cm.dt_alta,                             -- ✅
+        cm.dt_insert                AS dt_cadastro_conta, -- ✅ NOT NULL (modelagem.md) — usado só como
+                                                 --    último fallback não-nulo de `data_realizacao`
         cm.cd_cbo,                              -- ✅ profissional executante denormalizado
         cm.nm_profissional,                     -- ✅
         cm.nr_conselho,                         -- ✅
@@ -333,7 +335,12 @@ protocolo_situacao AS (
         (pcm.ie_situacao = '3')                   AS protocolo_pago,   -- ✅ '3' = Pago
         pcm.dt_recebimento,                       -- ✅
         pcm.dt_liberacao_protocolo,                -- ✅
-        pcm.dt_pagamento_protocolo                 -- ✅
+        pcm.dt_pagamento_protocolo,                -- ✅
+        pcm.dt_insert                AS dt_cadastro_protocolo -- ✅ NOT NULL (confirmado via MCP MySQL,
+                                                   --    2026-08-19) — `dt_recebimento` está SEMPRE NULL
+                                                   --    na base viva (nunca gravado pela aplicação); esta
+                                                   --    coluna é o fallback não-nulo mais próximo
+                                                   --    semanticamente (data de cadastro do protocolo)
     FROM sps_protocolo_conta_medica pcm
 ),
 
@@ -520,13 +527,31 @@ SELECT
     bd.plano_registro                                             AS plano_registro,
 
     cp.ie_tipo_guia_tiss                                          AS tipo_evento_atencao,
+    -- 🔴 PENDENTE — ver nota 8 no rodapé: `ie_origem_conta` guarda códigos
+    -- internos ('S'/'D'/'X') sem crosswalk documentado para o domínio ANS
+    -- 1-5 (modelagem.md §3 marca esse grupo de indicadores como "domínios
+    -- ainda não pesquisados"). NÃO mapeado aqui para não arriscar um valor
+    -- de domínio tecnicamente válido porém semanticamente errado — que é
+    -- pior que o erro de validação atual, pois passaria pelo XSD sem
+    -- avisar ninguém. Confirmar com a área de negócio antes de ligar este
+    -- mapeamento.
     cp.ie_origem_conta                                            AS origem_evento_atencao,
-    cp.nr_guia_prestador                                          AS numero_guia_prestador,
-    cp.nr_guia_prestador                                          AS numero_guia_operadora,
+    COALESCE(NULLIF(cp.nr_guia_prestador, ''), CAST(cp.idsps_conta_medica AS CHAR))
+                                                                   AS numero_guia_prestador,
+    COALESCE(NULLIF(cp.nr_guia_prestador, ''), CAST(cp.idsps_conta_medica AS CHAR))
+                                                                   AS numero_guia_operadora,
     -- ✅ confirmado via MCP MySQL (2026-08-17): não existe coluna própria de
     -- "número da guia na operadora" em sps_conta_medica nem em
     -- sps_autorizacao_guia — reaproveita nr_guia_prestador até que o sistema
     -- passe a gravar essa numeração separadamente.
+    -- ✅ AJUSTE 2026-08-19 — `nr_guia_prestador` está vazio em ~98% das contas
+    -- da base viva (149/152, confirmado via MCP MySQL) tanto na conta médica
+    -- quanto na guia de autorização vinculada — o prestador simplesmente não
+    -- preenche esse campo livre. Como o XSD exige o campo (obrigatório), cai
+    -- para a PK interna (`idsps_conta_medica`, sempre não-nula e única) em
+    -- vez de falhar a linha inteira. Isso é o número interno do sistema, não
+    -- o número real do prestador — se a operadora passar a exigir o número
+    -- real do prestador, esse fallback precisa ser revisto.
     REPEAT('0', 20)                                               AS identificacao_reembolso,
     NULL                                                          AS identificacao_valor_preestabelecido,
     NULL                                                          AS formas_remuneracao,
@@ -536,15 +561,26 @@ SELECT
     NULL                                                          AS numero_guia_spsadt_principal,
     DATE_FORMAT(cp.dt_autorizacao, '%Y-%m-%d')                    AS data_autorizacao,
     DATE_FORMAT(
-        COALESCE(cp.dt_inicio_faturamento, cp.dt_autorizacao),
+        COALESCE(cp.dt_inicio_faturamento, cp.dt_autorizacao, cp.dt_cadastro_conta),
         '%Y-%m-%d'
     )                                                              AS data_realizacao,
+    -- ✅ AJUSTE 2026-08-19 — `dt_inicio_faturamento` E `dt_autorizacao` estão
+    -- ambos NULL em ~81% das contas (123/152, confirmado via MCP MySQL);
+    -- `cp.dt_cadastro_conta` (= `sps_conta_medica.dt_insert`) é NOT NULL por
+    -- definição de coluna, garantindo que o campo obrigatório do XSD nunca
+    -- fique vazio — mas é a data de CADASTRO da conta, não necessariamente a
+    -- data real de realização do procedimento; tratar como último recurso.
     DATE_FORMAT(cp.dt_inicio_faturamento, '%Y-%m-%d')             AS data_inicial_faturamento,
     DATE_FORMAT(cp.dt_fim_faturamento, '%Y-%m-%d')                AS data_fim_periodo,
     DATE_FORMAT(
-        COALESCE(ps.dt_recebimento, cp.dt_autorizacao),
+        COALESCE(ps.dt_recebimento, ps.dt_cadastro_protocolo, cp.dt_autorizacao, cp.dt_cadastro_conta),
         '%Y-%m-%d'
     )                                                              AS data_protocolo_cobranca,
+    -- ✅ AJUSTE 2026-08-19 — `dt_recebimento` está NULL em 100% dos protocolos
+    -- da base viva (152/152, confirmado via MCP MySQL) — nunca é gravado pela
+    -- aplicação. `ps.dt_cadastro_protocolo` (NOT NULL) é o fallback mais
+    -- próximo semanticamente; `cp.dt_autorizacao`/`cp.dt_cadastro_conta`
+    -- seguram o caso raro de protocolo ausente.
     DATE_FORMAT(cp.dt_pagamento, '%Y-%m-%d')                      AS data_pagamento,
     DATE_FORMAT(
         COALESCE(cp.dt_fim_analise, ps.dt_liberacao_protocolo, cp.dt_autorizacao),
@@ -568,7 +604,12 @@ SELECT
         ''
     )                                                              AS diagnosticos_cid10,
     cp.ie_tipo_atendimento_tiss                                   AS tipo_atendimento,
-    cp.ie_regime_atendimento_tiss                                 AS regime_atendimento,
+    -- ✅ AJUSTE 2026-08-19 — `ie_regime_atendimento_tiss` é `char(2)` mas a
+    -- aplicação grava sem zero à esquerda ('1','2','4', confirmado via MCP
+    -- MySQL); o domínio do XSD 01.06.00 exige '01'..'05'. LPAD resolve sem
+    -- tocar no dado de origem; não altera linhas já NULL (obrigatório
+    -- ausente continua sendo outro erro, tratado à parte).
+    LPAD(cp.ie_regime_atendimento_tiss, 2, '0')                   AS regime_atendimento,
     cp.ie_saude_ocupacional_tiss                                  AS saude_ocupacional,
     cp.ie_tipo_faturamento_tiss                                   AS tipo_faturamento,
     NULL                                                          AS diarias_acompanhante,
@@ -676,4 +717,55 @@ ORDER BY
 --    livres foram removidos para impedir que o conteúdo do CSV cubra um
 --    período diferente da competência declarada no nome do arquivo `.XTE`
 --    gerado a partir dele.
+--
+-- -----------------------------------------------------------------------------
+-- Ajustes 2026-08-19 — diagnóstico de error/inconsistencia_padrao_260819.txt
+-- (42k+ linhas de erro, mesmos 7 problemas repetidos em ~100% das 152 contas/
+-- 6633 itens da base viva, schema `dados`) via MCP MySQL. Resultado: a maior
+-- parte dos erros era SISTÊMICA (mesma causa em toda linha), não sujeira
+-- pontual de dado — sinal de que valia a pena corrigir na query, não CSV a
+-- CSV. Itens efetivamente corrigidos nesta revisão (ver comentários inline
+-- nas colunas correspondentes do SELECT final):
+--   8. ✅ RESOLVIDO — `numero_guia_prestador`/`numero_guia_operadora` vazios
+--      em 149/152 contas → fallback para `idsps_conta_medica` (PK, sempre
+--      não-nula e única).
+--   9. ✅ RESOLVIDO — `data_realizacao` NULL em 123/152 contas (ambas as
+--      colunas-fonte NULL) → fallback final para `dt_insert` da conta médica
+--      (NOT NULL).
+--  10. ✅ RESOLVIDO — `data_protocolo_cobranca` NULL em 152/152 (via
+--      `dt_recebimento`, nunca gravado pela aplicação) → fallback para
+--      `dt_insert` do protocolo (NOT NULL), com `dt_autorizacao` como rede de
+--      segurança adicional.
+--  11. ✅ RESOLVIDO — `regime_atendimento` fora do domínio (valores '1'/'2'/
+--      '4' sem zero à esquerda; XSD exige '01'..'05') → `LPAD(..., 2, '0')`.
+--
+-- Itens que PERMANECEM pendentes de decisão de negócio — não corrigidos nesta
+-- revisão porque um mapeamento errado no SELECT criaria um erro NOVO (e mais
+-- silencioso, pois passaria pelo XSD) em vez de eliminar o atual:
+--  12. 🔴 `executante_cnes` NULL em praticamente todas as contas — não é bug
+--      de query: `pessoa_juridica.cd_cnes` está vazio para 7 dos 8
+--      prestadores cadastrados (inclusive os dois estabelecimentos-tenant
+--      testados), e prestadores Pessoa Física (a maioria das contas) nunca
+--      têm CNES próprio no modelo (CNES é um atributo de estabelecimento,
+--      não de profissional). Não há, nesta modelagem, um vínculo entre
+--      prestador-PF e um estabelecimento-PJ com CNES para usar como
+--      fallback. Requer: (a) cadastrar CNES nos estabelecimentos/PJs
+--      relevantes, e/ou (b) a área de negócio definir qual CNES usar para
+--      atendimento de profissional autônomo (tipicamente o CNES do
+--      consultório/clínica onde atende).
+--  13. 🔴 `origem_evento_atencao` fora do domínio 1-5 em 100% das contas —
+--      `ie_origem_conta` guarda códigos internos ('S' 113x, 'D' 36x, 'X' 3x)
+--      sem qualquer crosswalk documentado (não existe linha em `dominio`/
+--      `dominio_valor` para `ie_origem_conta`; modelagem.md §3 já marcava
+--      esse grupo de indicadores como 🔴 "domínios ainda não pesquisados").
+--      Domínio ANS confirmado via XSD (schemas/tiss/1.06.00/
+--      tissSimpleTypesMonitoramentoV1_06_00.xsd): 1=Rede Contratada/
+--      referenciada/credenciada, 2=Rede Própria-Cooperados, 3=Rede Própria-
+--      Demais prestadores, 4=Reembolso ao beneficiário, 5=Prestador eventual.
+--      ATENÇÃO: mapear errado para 4/5 sem ajustar também
+--      `identificacao_reembolso` (hoje fixo em 20 zeros) quebra a regra de
+--      negócio validada em parse-monitoring-csv.js (exige identificador real
+--      e não-zero quando origem ∈ {4,5}) — troca um erro de domínio por um
+--      erro de regra de negócio. Requer confirmação da área de negócio sobre
+--      o significado real de S/D/X antes de ligar este mapeamento.
 -- =============================================================================
