@@ -511,7 +511,24 @@ SELECT
     pr.versao_tiss_prestador                                      AS versao_tiss_prestador,
     pr.forma_envio                                                AS forma_envio,
 
-    pd.cnes                                                       AS executante_cnes,
+    -- ✅ AJUSTE 2026-08-19 — placeholder acordado com a operadora para contas
+    -- sem CNES cadastrado (ver nota 12 no rodapé: PJ sem `cd_cnes` ou
+    -- prestador PF sem estabelecimento-CNES vinculável). '9999999' tem 7
+    -- dígitos — respeita o limite do campo (csv-layouts.js `executante_cnes:
+    -- 7`) e do XSD; "99999999" (8 dígitos) trocaria o erro de campo
+    -- obrigatório por um erro de tamanho excedido, por isso não foi usado.
+    -- Cobre NULL, '0'/0 (CNES zerado não é código real) e também CNES REAL
+    -- cadastrado mas com mais de 7 dígitos (achado em amostra: prestador
+    -- idsps_prestador=2 tem cd_cnes='123456789', 9 dígitos — dado de
+    -- cadastro inválido/dummy que sozinho já estourava o XSD; melhor cair
+    -- no mesmo placeholder do que gerar erro de tamanho excedido).
+    CASE
+        WHEN pd.cnes IS NULL
+          OR CAST(pd.cnes AS CHAR) = '0'
+          OR CHAR_LENGTH(CAST(pd.cnes AS CHAR)) > 7
+        THEN '9999999'
+        ELSE CAST(pd.cnes AS CHAR)
+    END                                                            AS executante_cnes,
     pd.tipo_identificacao_tiss                                    AS executante_tipo_identificacao,
     pd.cpf_cnpj                                                   AS executante_cpf_cnpj,
     LEFT(COALESCE(CAST(pd.municipio_ibge AS CHAR), ''), 6)        AS executante_municipio,
@@ -739,20 +756,22 @@ ORDER BY
 --  11. ✅ RESOLVIDO — `regime_atendimento` fora do domínio (valores '1'/'2'/
 --      '4' sem zero à esquerda; XSD exige '01'..'05') → `LPAD(..., 2, '0')`.
 --
--- Itens que PERMANECEM pendentes de decisão de negócio — não corrigidos nesta
+--  12. ✅ RESOLVIDO (com placeholder acordado com a operadora, 2026-08-19) —
+--      `executante_cnes` NULL em praticamente todas as contas: raiz real é
+--      `pessoa_juridica.cd_cnes` vazio para 7 dos 8 prestadores cadastrados
+--      (inclusive os dois estabelecimentos-tenant testados), e prestadores
+--      Pessoa Física (a maioria das contas) não têm CNES próprio no modelo
+--      (CNES é atributo de estabelecimento, não de profissional) — não há
+--      vínculo PF→estabelecimento-PJ-com-CNES para usar como fallback real.
+--      Decisão de negócio: usar `'9999999'` (7 noves — respeita `max: 7` de
+--      `csv-layouts.js`/XSD; `'99999999'` com 8 dígitos foi descartado por
+--      estourar o tamanho do campo) como marcador de "CNES não disponível"
+--      até a operadora cadastrar os CNES reais (PJs) ou definir o CNES do
+--      consultório para os profissionais autônomos.
+--
+-- Item que PERMANECE pendente de decisão de negócio — não corrigido nesta
 -- revisão porque um mapeamento errado no SELECT criaria um erro NOVO (e mais
 -- silencioso, pois passaria pelo XSD) em vez de eliminar o atual:
---  12. 🔴 `executante_cnes` NULL em praticamente todas as contas — não é bug
---      de query: `pessoa_juridica.cd_cnes` está vazio para 7 dos 8
---      prestadores cadastrados (inclusive os dois estabelecimentos-tenant
---      testados), e prestadores Pessoa Física (a maioria das contas) nunca
---      têm CNES próprio no modelo (CNES é um atributo de estabelecimento,
---      não de profissional). Não há, nesta modelagem, um vínculo entre
---      prestador-PF e um estabelecimento-PJ com CNES para usar como
---      fallback. Requer: (a) cadastrar CNES nos estabelecimentos/PJs
---      relevantes, e/ou (b) a área de negócio definir qual CNES usar para
---      atendimento de profissional autônomo (tipicamente o CNES do
---      consultório/clínica onde atende).
 --  13. 🔴 `origem_evento_atencao` fora do domínio 1-5 em 100% das contas —
 --      `ie_origem_conta` guarda códigos internos ('S' 113x, 'D' 36x, 'X' 3x)
 --      sem qualquer crosswalk documentado (não existe linha em `dominio`/

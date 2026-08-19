@@ -1,0 +1,3 @@
+- Ver CNES para prestador PF;
+- Levantar o CNES para todos os PJ como obrigatório no setor de cadastros.
+-
