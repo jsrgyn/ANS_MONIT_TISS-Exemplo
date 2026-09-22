@@ -25,9 +25,18 @@
 -- alinhada ao fluxo de envio do Monitoramento TISS: entra no CSV da
 -- competência QUALQUER conta médica que teve ao menos UM dos 3 eventos abaixo
 -- ocorrido DENTRO do mês de competência informado (não apenas as já pagas):
---   • AVISADO   = sps_conta_medica.dt_insert cai na competência (o prestador
---                 registrou/enviou a conta neste mês) — mesmo evento usado
---                 como "CUSTO AVISADO" no relatório-fonte.
+--   • AVISADO   = sps_protocolo_conta_medica.dt_insert cai na competência
+--                 (data de cadastro do PROTOCOLO, não da conta) — ✅ CORRIGIDO
+--                 2026-09-21: usa o mesmo evento do relatório-fonte ("CUSTO
+--                 AVISADO", bandas 5375/5377) e da query contábil de eventos
+--                 (query_diops_dados_eventos_v2.sql, coluna `data_aviso`);
+--                 até 2026-09-21 esta query usava indevidamente
+--                 sps_conta_medica.dt_insert (data da CONTA), divergindo do
+--                 relatório-fonte que ela já afirmava replicar — auditoria
+--                 comparando esta query com a exportação contábil de eventos
+--                 (10_PROJETOS/exportacao-contabilidade-novamed-integra)
+--                 encontrou a divergência e motivou a correção (ver nota 14
+--                 no rodapé).
 --   • LIBERADO  = primeira mudança de sps_protocolo_conta_medica.ie_situacao
 --                 para '2' ("Liberado para pagamento", domínio 871) ocorreu
 --                 na competência — rastreada via sps_conta_medica_log, evento
@@ -87,8 +96,11 @@
 -- (ver docs/LAYOUT_CSV.md).
 --
 -- Recomendações de performance (MySQL 8):
---   • Garantir índice em sps_conta_medica (idestabelecimento, dt_insert) —
---     filtro primário do evento AVISADO (`contas_avisadas_periodo`);
+--   • Garantir índice em sps_protocolo_conta_medica (dt_insert) — filtro
+--     primário do evento AVISADO (`contas_avisadas_periodo`, ✅ corrigido
+--     2026-09-21 de cm.dt_insert para pcm.dt_insert — ver nota 14 no rodapé);
+--   • Garantir índice em sps_conta_medica (idestabelecimento) — usado no
+--     filtro de tenant/prestador de `contas_avisadas_periodo`;
 --   • Garantir índice em sps_conta_medica_log (idsps_protocolo_conta_medica,
 --     ie_autorizacao_evento_log, status, dt_insert) — a query agora varre esta
 --     tabela DUAS vezes (uma por ROW_NUMBER() para LIBERADO, outra para PAGO);
@@ -107,7 +119,6 @@
 --     sps_conta_medica_proc e sps_conta_medica_log podem ser as maiores
 --     tabelas do escopo.
 -- =============================================================================
-
 WITH
 parametros AS (
     SELECT
@@ -128,15 +139,17 @@ parametros AS (
         COALESCE(NULLIF(CAST(:versao_tiss_prestador AS CHAR), ''), '027') AS versao_tiss_prestador,
         COALESCE(NULLIF(CAST(:tipo_registro AS CHAR), ''), '1')          AS tipo_registro
 ),
-
 -- -----------------------------------------------------------------------------
--- Evento 1/3 — AVISADO: sps_conta_medica.dt_insert (entrada/registro da conta
--- no sistema) cai dentro do mês de competência — ✅ mesmo evento usado como
--- "CUSTO AVISADO" no relatório-fonte (CTE `avisos`, bandas 5375/5377). Exige
--- protocolo ativo, replicando o INNER JOIN do relatório-fonte.
+-- Evento 1/3 — AVISADO: sps_protocolo_conta_medica.dt_insert (entrada/registro
+-- do PROTOCOLO no sistema, não da conta) cai dentro do mês de competência —
+-- ✅ CORRIGIDO 2026-09-21 (era cm.dt_insert): mesmo evento usado como "CUSTO
+-- AVISADO" no relatório-fonte (CTE `contas_avisadas_pagas`, bandas 5375/5377)
+-- e como `data_aviso` na query contábil de exportação de eventos
+-- (query_diops_dados_eventos_v2.sql). Exige protocolo ativo, replicando o
+-- INNER JOIN do relatório-fonte.
 -- -----------------------------------------------------------------------------
 contas_avisadas_periodo AS (
-    SELECT DISTINCT cm.idsps_conta_medica
+    SELECT DISTINCT cm.idsps_conta_medica, pcm.dt_insert AS dt_evento
     FROM sps_conta_medica cm
     INNER JOIN sps_protocolo_conta_medica pcm
             ON pcm.idsps_protocolo_conta_medica = cm.idsps_protocolo_conta_medica
@@ -144,11 +157,10 @@ contas_avisadas_periodo AS (
     CROSS JOIN parametros p
     WHERE cm.status = 'A'
       AND cm.idestabelecimento = p.idestabelecimento
-      AND cm.dt_insert >= p.dt_inicio
-      AND cm.dt_insert <  p.dt_fim_exclusivo
+      AND pcm.dt_insert >= p.dt_inicio
+      AND pcm.dt_insert <  p.dt_fim_exclusivo
       AND (p.idprestador IS NULL OR cm.idsps_prestador_exec = p.idprestador)
 ),
-
 -- -----------------------------------------------------------------------------
 -- Evento 2/3 — LIBERADO PARA PAGAMENTO: primeira transição de
 -- sps_protocolo_conta_medica.ie_situacao para '2' (domínio 871, §4.4,
@@ -182,7 +194,7 @@ eventos_liberacao_ranqueados AS (
       )
 ),
 protocolos_liberados_periodo AS (
-    SELECT elr.idsps_protocolo_conta_medica
+    SELECT elr.idsps_protocolo_conta_medica, elr.dt_liberacao AS dt_evento
     FROM eventos_liberacao_ranqueados elr
     CROSS JOIN parametros p
     WHERE elr.nr_evento_liberacao = 1
@@ -190,7 +202,7 @@ protocolos_liberados_periodo AS (
       AND elr.dt_liberacao <  p.dt_fim_exclusivo
 ),
 contas_liberadas_periodo AS (
-    SELECT DISTINCT cm.idsps_conta_medica
+    SELECT DISTINCT cm.idsps_conta_medica, plp.dt_evento
     FROM sps_conta_medica cm
     INNER JOIN protocolos_liberados_periodo plp
             ON plp.idsps_protocolo_conta_medica = cm.idsps_protocolo_conta_medica
@@ -199,7 +211,6 @@ contas_liberadas_periodo AS (
       AND cm.idestabelecimento = p.idestabelecimento
       AND (p.idprestador IS NULL OR cm.idsps_prestador_exec = p.idprestador)
 ),
-
 -- -----------------------------------------------------------------------------
 -- Evento 3/3 — PAGO: primeira transição de ie_situacao para '3' (Pago) —
 -- ✅ replica literalmente a CTE `eventos_pagamento_ranqueados` do
@@ -241,7 +252,6 @@ contas_pagas_periodo AS (
       AND cm.idestabelecimento = p.idestabelecimento
       AND (p.idprestador IS NULL OR cm.idsps_prestador_exec = p.idprestador)
 ),
-
 -- -----------------------------------------------------------------------------
 -- União dos 3 eventos — população final do arquivo de Monitoramento da
 -- competência: toda conta com PELO MENOS UM dos 3 eventos no mês informado.
@@ -255,7 +265,6 @@ contas_evento_periodo AS (
     UNION
     SELECT idsps_conta_medica FROM contas_pagas_periodo
 ),
-
 -- -----------------------------------------------------------------------------
 -- Contas médicas selecionadas pela união de eventos acima. Os valores
 -- (vl_apresentado/vl_liberado/vl_glosado etc.) refletem o estado ATUAL da
@@ -322,7 +331,6 @@ contas_periodo AS (
     WHERE cm.status = 'A'
       AND cm.idestabelecimento = p.idestabelecimento
 ),
-
 -- -----------------------------------------------------------------------------
 -- Situação do protocolo (para aplicar a regra do CUSTO PAGO) e a data de
 -- recebimento do protocolo pela operadora, usada como `data_protocolo_cobranca`
@@ -343,7 +351,6 @@ protocolo_situacao AS (
                                                    --    semanticamente (data de cadastro do protocolo)
     FROM sps_protocolo_conta_medica pcm
 ),
-
 -- -----------------------------------------------------------------------------
 -- Endereço residencial do beneficiário, para obter o código IBGE do município
 -- (padrão já usado em produção para o SIB: pessoa_fisica_compl → logradouro →
@@ -364,7 +371,6 @@ beneficiario_endereco AS (
     LEFT JOIN municipio m ON m.idmunicipio = l.idmunicipio -- ✅
     WHERE pfc.ie_tipo_complemento = 1         -- ✅ 1 = endereço residencial (padrão SIB)
 ),
-
 -- -----------------------------------------------------------------------------
 -- Dados do beneficiário: CNS/CPF/sexo/nascimento (pessoa_fisica — ✅ confirmado
 -- em produção), produto/plano contratado (sps_produto.nr_protocolo_ans — ✅
@@ -388,7 +394,6 @@ beneficiario_dados AS (
     LEFT JOIN beneficiario_endereco be
            ON be.idpessoa_fisica = sb.idpessoa_fisica AND be.nr_ordem = 1
 ),
-
 -- -----------------------------------------------------------------------------
 -- Endereço do prestador (PJ e PF), para obter o código IBGE do município via
 -- CEP — mesmo mecanismo já usado em `beneficiario_endereco` (CEP → logradouro
@@ -419,7 +424,6 @@ prestador_endereco_pf AS (
     LEFT JOIN municipio m ON m.idmunicipio = l.idmunicipio
     WHERE pfc.ie_tipo_complemento = 1
 ),
-
 -- -----------------------------------------------------------------------------
 -- Dados do prestador executante: CNES/CNPJ (pessoa_juridica — ✅ cd_cnes e cnpj
 -- confirmados em padroes_sql.md "Help de prestador"). Prestador Pessoa Física
@@ -437,14 +441,38 @@ prestador_dados AS (
             REGEXP_REPLACE(pf.nr_cpf, '[^0-9]', '')
         )                                                        AS cpf_cnpj,
         pj.cd_cnes                                                AS cnes,        -- ✅ (padroes_sql.md)
-        COALESCE(pej.cd_ibge, pef.cd_ibge)                        AS municipio_ibge -- ✅ via CEP (ver acima)
+        COALESCE(pej.cd_ibge, pef.cd_ibge)                        AS municipio_ibge, -- ✅ via CEP (ver acima)
+        -- ✅ AJUSTE 2026-09-22 — origem_evento_atencao: `sps_prestador.
+        -- ie_tipo_relacao_prestador` (domínio 843) é o campo correto (confirmado
+        -- pelo usuário), não `sps_conta_medica.ie_origem_conta` (domínio 869,
+        -- que descreve MÉTODO DE DIGITAÇÃO da conta — Manual/Sistema/XML —,
+        -- sem relação nenhuma com rede de prestador; usá-lo seria corrigir o
+        -- campo errado). Mesmo campo já usado com o mesmo propósito na query
+        -- contábil de eventos (query_diops_dados_eventos_v2.sql, coluna
+        -- "rede"). Mapeamento para o domínio ANS 1-5 confirmado pelo usuário
+        -- 2026-09-22, só para os 3 valores presentes na base viva de
+        -- idestabelecimento=19 (843=1/4/6, 100% dos prestadores do escopo);
+        -- 843=2/3/5 não ocorrem hoje e ficam propositalmente NULL (gera erro
+        -- visível de XSD se aparecerem, em vez de assumir um valor não
+        -- confirmado):
+        --   843=1 Contratualização Direta (Credenciamento) → ANS 1 (Rede
+        --         Contratada/referenciada/credenciada)
+        --   843=6 Rede Própria                              → ANS 3 (Rede
+        --         Própria-Demais prestadores)
+        --   843=4 Não Contratualizado                       → ANS 5
+        --         (Prestador eventual)
+        CASE sp.ie_tipo_relacao_prestador
+            WHEN '1' THEN '1'
+            WHEN '6' THEN '3'
+            WHEN '4' THEN '5'
+            ELSE NULL
+        END                                                        AS origem_evento_atencao_ans
     FROM sps_prestador sp
     LEFT JOIN pessoa_juridica pj ON pj.idpessoa_juridica = sp.idpessoa_juridica -- ✅
     LEFT JOIN pessoa_fisica  pf ON pf.idpessoa_fisica  = sp.idpessoa_fisica     -- ✅
     LEFT JOIN prestador_endereco_pj pej ON pej.idpessoa_juridica = pj.idpessoa_juridica
     LEFT JOIN prestador_endereco_pf pef ON pef.idpessoa_fisica = pf.idpessoa_fisica AND pef.nr_ordem = 1
 ),
-
 -- -----------------------------------------------------------------------------
 -- Totais por classificação de despesa (procedimento.ie_classificacao, domínio
 -- 112, ✅ confirmado em modelagem.md §4.11: 1 Procedimentos, 2 Serviços
@@ -476,7 +504,6 @@ totais_guia AS (
     WHERE scmp.status = 'A'
     GROUP BY scmp.idsps_conta_medica
 ),
-
 -- -----------------------------------------------------------------------------
 -- Itens (procedimentos) da conta médica — 1 linha de CSV por item; a
 -- quantidade paga é derivada de vl_total_aprovado/vl_unitario quando possível
@@ -499,7 +526,6 @@ itens AS (
     INNER JOIN procedimento p ON p.idprocedimento = scmp.idprocedimento
     WHERE scmp.status = 'A'
 )
-
 -- =============================================================================
 -- SELECT final — uma linha por procedimento; colunas na MESMA ordem do
 -- cabeçalho de examples/csv/guia_monitoramento.csv.
@@ -510,7 +536,6 @@ SELECT
     pr.tipo_registro                                              AS tipo_registro,
     pr.versao_tiss_prestador                                      AS versao_tiss_prestador,
     pr.forma_envio                                                AS forma_envio,
-
     -- ✅ AJUSTE 2026-08-19 — placeholder acordado com a operadora para contas
     -- sem CNES cadastrado (ver nota 12 no rodapé: PJ sem `cd_cnes` ou
     -- prestador PF sem estabelecimento-CNES vinculável). '9999999' tem 7
@@ -532,27 +557,21 @@ SELECT
     pd.tipo_identificacao_tiss                                    AS executante_tipo_identificacao,
     pd.cpf_cnpj                                                   AS executante_cpf_cnpj,
     LEFT(COALESCE(CAST(pd.municipio_ibge AS CHAR), ''), 6)        AS executante_municipio,
-
     NULL                                                          AS operadora_intermediaria_registro,
     NULL                                                          AS operadora_intermediaria_tipo_atendimento,
-
     bd.nr_cartao_nac_sus                                          AS beneficiario_cns,
     bd.nr_cpf                                                     AS beneficiario_cpf,
     bd.sexo_tiss                                                  AS beneficiario_sexo,
     DATE_FORMAT(bd.dt_nascimento, '%Y-%m-%d')                     AS beneficiario_data_nascimento,
     bd.municipio_ibge                                             AS beneficiario_municipio_residencia,
     bd.plano_registro                                             AS plano_registro,
-
     cp.ie_tipo_guia_tiss                                          AS tipo_evento_atencao,
-    -- 🔴 PENDENTE — ver nota 8 no rodapé: `ie_origem_conta` guarda códigos
-    -- internos ('S'/'D'/'X') sem crosswalk documentado para o domínio ANS
-    -- 1-5 (modelagem.md §3 marca esse grupo de indicadores como "domínios
-    -- ainda não pesquisados"). NÃO mapeado aqui para não arriscar um valor
-    -- de domínio tecnicamente válido porém semanticamente errado — que é
-    -- pior que o erro de validação atual, pois passaria pelo XSD sem
-    -- avisar ninguém. Confirmar com a área de negócio antes de ligar este
-    -- mapeamento.
-    cp.ie_origem_conta                                            AS origem_evento_atencao,
+    -- ✅ RESOLVIDO 2026-09-22 — ver nota 13 no rodapé: fonte trocada de
+    -- `cp.ie_origem_conta` (campo errado — método de digitação da conta,
+    -- domínio 869) para `pd.origem_evento_atencao_ans`, derivado de
+    -- `sps_prestador.ie_tipo_relacao_prestador` (domínio 843), mapeamento
+    -- confirmado pelo usuário — ver comentário na CTE `prestador_dados`.
+    pd.origem_evento_atencao_ans                                  AS origem_evento_atencao,
     COALESCE(NULLIF(cp.nr_guia_prestador, ''), CAST(cp.idsps_conta_medica AS CHAR))
                                                                    AS numero_guia_prestador,
     COALESCE(NULLIF(cp.nr_guia_prestador, ''), CAST(cp.idsps_conta_medica AS CHAR))
@@ -569,10 +588,23 @@ SELECT
     -- vez de falhar a linha inteira. Isso é o número interno do sistema, não
     -- o número real do prestador — se a operadora passar a exigir o número
     -- real do prestador, esse fallback precisa ser revisto.
-    REPEAT('0', 20)                                               AS identificacao_reembolso,
+    -- ✅ AJUSTE 2026-09-22 — quando `origem_evento_atencao` é 4 ou 5, o
+    -- validador do repositório exige `identificacao_reembolso` diferente de
+    -- 20 zeros (parse-monitoring-csv.js) — efeito colateral do fix do
+    -- `origem_evento_atencao` acima (22 linhas/5 contas só em 04/2026, mesmo
+    -- padrão deve se repetir nas outras competências). Não é reembolso real
+    -- ao beneficiário nesses casos (é só "prestador eventual"/fora da rede),
+    -- então não existe um número de reembolso de fato — decisão do usuário
+    -- 2026-09-22: usar `idsps_conta_medica` (mesmo padrão já usado acima para
+    -- `numero_guia_prestador`/`numero_guia_operadora` quando o valor real não
+    -- existe).
+    CASE
+        WHEN pd.origem_evento_atencao_ans IN ('4', '5')
+        THEN LPAD(cp.idsps_conta_medica, 20, '0')
+        ELSE REPEAT('0', 20)
+    END                                                            AS identificacao_reembolso,
     NULL                                                          AS identificacao_valor_preestabelecido,
     NULL                                                          AS formas_remuneracao,
-
     NULL                                                          AS guia_solicitacao_internacao,
     NULL                                                          AS data_solicitacao,
     NULL                                                          AS numero_guia_spsadt_principal,
@@ -599,11 +631,17 @@ SELECT
     -- próximo semanticamente; `cp.dt_autorizacao`/`cp.dt_cadastro_conta`
     -- seguram o caso raro de protocolo ausente.
     DATE_FORMAT(cp.dt_pagamento, '%Y-%m-%d')                      AS data_pagamento,
+    -- ✅ AJUSTE 2026-09-22 — mesmo padrão dos itens 9/10 (data_realizacao /
+    -- data_protocolo_cobranca): contas AVISADAS mas ainda em análise
+    -- (`ie_situacao='1'`) não têm `dt_fim_analise`/`dt_liberacao_protocolo`/
+    -- `dt_autorizacao` preenchidos — achado na auditoria de 07/2026 (contas
+    -- 2572, 2573, 3580, confirmado via MCP MySQL). `cp.dt_cadastro_conta`
+    -- (NOT NULL) como último recurso evita o campo obrigatório vazio; mesma
+    -- ressalva: é a data de CADASTRO, não a data real de processamento.
     DATE_FORMAT(
-        COALESCE(cp.dt_fim_analise, ps.dt_liberacao_protocolo, cp.dt_autorizacao),
+        COALESCE(cp.dt_fim_analise, ps.dt_liberacao_protocolo, cp.dt_autorizacao, cp.dt_cadastro_conta),
         '%Y-%m-%d'
     )                                                              AS data_processamento_guia,
-
     cp.ie_tipo_consulta                                           AS tipo_consulta,
     cp.cd_cbo                                                     AS cbo_executante,
     cp.ie_atendimento_rn                                          AS indicacao_recem_nato,
@@ -620,7 +658,13 @@ SELECT
         ),
         ''
     )                                                              AS diagnosticos_cid10,
-    cp.ie_tipo_atendimento_tiss                                   AS tipo_atendimento,
+    -- ✅ AJUSTE 2026-09-21 — mesmo problema do `regime_atendimento` (nota abaixo):
+    -- `ie_tipo_atendimento_tiss` é gravado sem zero à esquerda ('1','2','3'...
+    -- confirmado via MCP MySQL contra o banco vivo, idestabelecimento=19); o
+    -- domínio do XSD 01.06.00 exige '01'..'23'. Achado na auditoria estrutural
+    -- da competência 04/2026 (2026-09-21): 24 linhas rejeitadas pelo validador
+    -- do repositório por esse motivo. LPAD resolve sem tocar no dado de origem.
+    LPAD(cp.ie_tipo_atendimento_tiss, 2, '0')                     AS tipo_atendimento,
     -- ✅ AJUSTE 2026-08-19 — `ie_regime_atendimento_tiss` é `char(2)` mas a
     -- aplicação grava sem zero à esquerda ('1','2','4', confirmado via MCP
     -- MySQL); o domínio do XSD 01.06.00 exige '01'..'05'. LPAD resolve sem
@@ -632,7 +676,6 @@ SELECT
     NULL                                                          AS diarias_acompanhante,
     NULL                                                          AS diarias_uti,
     cp.ie_motivo_encerramento_tiss                                AS motivo_saida,
-
     CAST(cp.vl_apresentado AS DECIMAL(18, 2))                     AS valor_total_informado,
     CAST(cp.vl_liberado + cp.vl_glosado AS DECIMAL(18, 2))        AS valor_processado,
     CAST(COALESCE(tg.vl_pago_procedimentos, 0) AS DECIMAL(18, 2)) AS valor_total_pago_procedimentos,
@@ -648,11 +691,15 @@ SELECT
     )                                                              AS valor_pago_guia,
     CAST(0.00 AS DECIMAL(18, 2))                                  AS valor_pago_fornecedores,
     CAST(0.00 AS DECIMAL(18, 2))                                  AS valor_total_tabela_propria,
-    CAST(cp.vl_coparticipacao AS DECIMAL(18, 2))                  AS valor_total_coparticipacao,
-
+    -- ✅ AJUSTE 2026-09-21 — `vl_coparticipacao` está NULL em parte das contas
+    -- da base viva (333 contas em idestabelecimento=19, confirmado via MCP
+    -- MySQL); o XSD exige o campo preenchido. COALESCE para 0.00 (mesmo padrão
+    -- de fallback zero já usado nas colunas `valor_pago_fornecedores`/
+    -- `valor_total_tabela_propria` acima) — conta sem coparticipação registrada
+    -- é semanticamente "zero", não "campo ausente por erro".
+    CAST(COALESCE(cp.vl_coparticipacao, 0.00) AS DECIMAL(18, 2))  AS valor_total_coparticipacao,
     cp.nr_declaracao_nascido_vivo                                 AS declaracoes_nascido,
     cp.nr_declaracao_obito                                        AS declaracoes_obito,
-
     it.ie_tabela_tuss                                             AS procedimento_codigo_tabela,
     NULL                                                          AS procedimento_grupo,
     it.cd_procedimento                                            AS procedimento_codigo,
@@ -661,22 +708,30 @@ SELECT
     NULL                                                          AS dente_face,
     CAST(it.qt_realizada AS DECIMAL(18, 4))                       AS quantidade_informada,
     CAST(it.vl_total_apresentado AS DECIMAL(18, 2))               AS valor_informado,
+    -- ✅ AJUSTE 2026-09-22 — achado na auditoria de 06/2026 e 07/2026 (conta
+    -- 1209, item 8746, confirmado via MCP MySQL): protocolo já Pago
+    -- (`ie_situacao='3'`) mas `vl_total_aprovado` do item NULL, não 0.00 —
+    -- valor de glosa da conta bate exatamente com `vl_total_apresentado`
+    -- desse item, ou seja, é um item 100% glosado cujo `vl_total_aprovado`
+    -- nunca foi zerado pela aplicação (deveria ser 0.00, não NULL). Como esta
+    -- coluna só é avaliada quando o protocolo já está Pago (análise
+    -- encerrada), NULL aqui só pode significar "zero aprovado", nunca
+    -- "ainda não analisado" — COALESCE para 0 é seguro nesse ponto.
     CAST(
         CASE
             WHEN it.vl_unitario IS NULL OR it.vl_unitario = 0 THEN it.qt_realizada
-            ELSE ROUND(it.vl_total_aprovado / it.vl_unitario, 4)
+            ELSE ROUND(COALESCE(it.vl_total_aprovado, 0) / it.vl_unitario, 4)
         END AS DECIMAL(18, 4)
     )                                                              AS quantidade_paga,
     it.cd_unidade_medida                                          AS unidade_medida,
     CAST(
-        CASE WHEN ps.protocolo_pago THEN it.vl_total_aprovado ELSE 0 END
+        CASE WHEN ps.protocolo_pago THEN COALESCE(it.vl_total_aprovado, 0) ELSE 0 END
         AS DECIMAL(18, 2)
     )                                                              AS valor_pago_procedimento,
     CAST(0.00 AS DECIMAL(18, 2))                                  AS valor_pago_fornecedor,
     NULL                                                          AS fornecedor_cnpj,
     CAST(it.vl_coparticipacao AS DECIMAL(18, 2))                  AS valor_coparticipacao_procedimento,
     NULL                                                          AS detalhes_pacote
-
 FROM contas_periodo cp
 CROSS JOIN parametros pr
 INNER JOIN itens it              ON it.idsps_conta_medica = cp.idsps_conta_medica
@@ -687,7 +742,6 @@ LEFT JOIN totais_guia tg         ON tg.idsps_conta_medica = cp.idsps_conta_medic
 ORDER BY
     cp.idsps_conta_medica,
     it.idsps_conta_medica_proc;
-
 -- =============================================================================
 -- Validação via MCP MySQL contra o banco vivo (schema `dados`, 2026-08-17) —
 -- resolve a maior parte das pendências 🔴/🟡 da sessão anterior:
@@ -734,7 +788,6 @@ ORDER BY
 --    livres foram removidos para impedir que o conteúdo do CSV cubra um
 --    período diferente da competência declarada no nome do arquivo `.XTE`
 --    gerado a partir dele.
---
 -- -----------------------------------------------------------------------------
 -- Ajustes 2026-08-19 — diagnóstico de error/inconsistencia_padrao_260819.txt
 -- (42k+ linhas de erro, mesmos 7 problemas repetidos em ~100% das 152 contas/
@@ -767,24 +820,178 @@ ORDER BY
 --      `csv-layouts.js`/XSD; `'99999999'` com 8 dígitos foi descartado por
 --      estourar o tamanho do campo) como marcador de "CNES não disponível"
 --      até a operadora cadastrar os CNES reais (PJs) ou definir o CNES do
---      consultório para os profissionais autônomos.
+--      consultório para os profissionais autônomos. Mesmo placeholder
+--      também cobre CNES > 7 dígitos (achado em amostra: idsps_prestador=2
+--      tem `cd_cnes='123456789'`, cadastro inválido/dummy de 9 dígitos).
+--      Ver `nota.txt` do projeto: "Ver CNES para prestador PF" e "Levantar
+--      o CNES para todos os PJ como obrigatório no setor de cadastros" —
+--      ambos já rastreiam esse pendente com a área de cadastros.
 --
 -- Item que PERMANECE pendente de decisão de negócio — não corrigido nesta
 -- revisão porque um mapeamento errado no SELECT criaria um erro NOVO (e mais
 -- silencioso, pois passaria pelo XSD) em vez de eliminar o atual:
---  13. 🔴 `origem_evento_atencao` fora do domínio 1-5 em 100% das contas —
---      `ie_origem_conta` guarda códigos internos ('S' 113x, 'D' 36x, 'X' 3x)
---      sem qualquer crosswalk documentado (não existe linha em `dominio`/
---      `dominio_valor` para `ie_origem_conta`; modelagem.md §3 já marcava
---      esse grupo de indicadores como 🔴 "domínios ainda não pesquisados").
---      Domínio ANS confirmado via XSD (schemas/tiss/1.06.00/
---      tissSimpleTypesMonitoramentoV1_06_00.xsd): 1=Rede Contratada/
---      referenciada/credenciada, 2=Rede Própria-Cooperados, 3=Rede Própria-
---      Demais prestadores, 4=Reembolso ao beneficiário, 5=Prestador eventual.
---      ATENÇÃO: mapear errado para 4/5 sem ajustar também
---      `identificacao_reembolso` (hoje fixo em 20 zeros) quebra a regra de
---      negócio validada em parse-monitoring-csv.js (exige identificador real
---      e não-zero quando origem ∈ {4,5}) — troca um erro de domínio por um
---      erro de regra de negócio. Requer confirmação da área de negócio sobre
---      o significado real de S/D/X antes de ligar este mapeamento.
+--  13. ✅ RESOLVIDO 2026-09-22 — `origem_evento_atencao` fora do domínio 1-5
+--      em 100% das contas de todas as competências geradas (04 a 07/2026).
+--      Causa raiz real: a fonte usada até então (`sps_conta_medica.
+--      ie_origem_conta`) era o campo ERRADO — é o domínio 869 ("Origem do
+--      protocolo de contas médicas": D=Digitação Manual, S=Importação Guia
+--      do Sistema, X=Importação XML), que descreve MÉTODO DE DIGITAÇÃO da
+--      conta, sem nenhuma relação com rede de prestador. Antes de escrever
+--      qualquer correção, verificamos via MCP MySQL (mysql-homologacao,
+--      2026-09-22) se havia trigger bloqueando UPDATE em `sps_conta_medica`
+--      (havia — `trg_sps_conta_medica_before_update` só permite editar conta
+--      com `ie_situacao='1'`, bloqueando ~95% da base já liberada/paga) — a
+--      investigação de trigger foi o que revelou que a premissa inicial
+--      (corrigir dado em `ie_origem_conta` via UPDATE) estava errada; um
+--      UPDATE ali teria corrompido um campo operacional legítimo e ainda
+--      assim não resolveria o problema (domínio errado, não valor errado).
+--      Fonte corrigida para `sps_prestador.ie_tipo_relacao_prestador`
+--      (domínio 843), já usado com o mesmo propósito na query contábil de
+--      eventos (query_diops_dados_eventos_v2.sql, coluna "rede") — ver CASE
+--      em `origem_evento_atencao_ans` na CTE `prestador_dados`. Mapeamento
+--      843→ANS confirmado pelo usuário 2026-09-22 (só para os 3 valores
+--      presentes na base viva de idestabelecimento=19): 1→1, 6→3, 4→5.
+--      Validado: 0 erros de `origem_evento_atencao` em 04/2026 (2.067
+--      linhas). Efeito colateral resolvido junto: mapear para o domínio 5
+--      exige `identificacao_reembolso` não-zero (ver ajuste na própria
+--      coluna, mesmo padrão de fallback para `idsps_conta_medica` já usado
+--      em `numero_guia_prestador`/`numero_guia_operadora`).
+-- -----------------------------------------------------------------------------
+-- Ajuste 2026-09-21 — auditoria de sincronismo entre esta query e a query
+-- contábil de exportação de eventos (10_PROJETOS/exportacao-contabilidade-
+-- novamed-integra/ANEXOS/scripts/query_diops_dados_eventos_v2.sql):
+--  14. ✅ RESOLVIDO — o evento AVISADO usava `sps_conta_medica.dt_insert`
+--      (data de cadastro da CONTA), mas tanto o relatório-fonte ("SPS - Custo
+--      Médico do usuário por prestador.txt", CTE `contas_avisadas_pagas`)
+--      quanto a query contábil de eventos (coluna `data_aviso`) usam
+--      `sps_protocolo_conta_medica.dt_insert` (data de cadastro do
+--      PROTOCOLO). Como um protocolo pode ser cadastrado em data diferente
+--      das contas médicas vinculadas a ele, a divergência podia fazer esta
+--      query incluir/excluir contas de uma competência de forma diferente do
+--      que a contabilidade considera "avisado" — quebrando o sincronismo
+--      exigido entre os dois processos (envio TISS e exportação contábil de
+--      eventos). Corrigido para `pcm.dt_insert` em `contas_avisadas_periodo`,
+--      alinhando os 3 estágios (avisado/liberado/pago) desta query com a
+--      contábil. LIBERADO permanece exclusivo desta query (rastreado por log
+--      evento '9') — não existe equivalente na exportação contábil, que não
+--      precisa dessa granularidade. PAGO já estava sincronizado (mesmo
+--      mecanismo de log evento '4' nas duas queries).
+--
+--      Decisão de escopo tomada na mesma auditoria (2026-09-21): o sistema
+--      também tem um campo próprio de competência (`sps_lote_conta_medica.
+--      mes_referencia`, documentado em modelagem.md §5 como "Competência do
+--      lote"). Para 04/2026 ele retorna 702 contas contra as 279 do critério
+--      evento-no-mês acima — decisão consciente do usuário de MANTER
+--      evento-no-mês como critério de inclusão do Monitoramento TISS, não
+--      trocar para `mes_referencia` (registrado em DECISOES.md do projeto
+--      10_PROJETOS/envio-dados-tiss-competencia-07-2026).
+-- -----------------------------------------------------------------------------
+-- Ajustes 2026-09-21 — 1ª geração real de teste (competência 202604, 279
+-- contas, 2067 itens) rodada e auditada contra produção (idestabelecimento=19).
+-- Auditoria de valores: reconciliação por protocolo 100% correta (SOMA das
+-- contas do escopo por protocolo bate exatamente com
+-- `sps_protocolo_conta_medica.vl_apresentado`, nenhuma conta duplicada/faltante
+-- dentro de um protocolo tocado). Sem linha duplicada no CSV gerado.
+-- Validação estrutural (gerador do repositório, XSD 01.06.00) encontrou e
+-- resolveu 2 bugs de domínio/obrigatoriedade:
+--  15. ✅ RESOLVIDO — `tipo_atendimento` (`ie_tipo_atendimento_tiss`) gravado
+--      sem zero à esquerda ('1','2','3'...), mesma classe de bug do item 11
+--      (`regime_atendimento`) — 24 linhas rejeitadas pelo XSD (domínio exige
+--      '01'..'23'). Corrigido com `LPAD(..., 2, '0')`, mesmo padrão já usado
+--      em `regime_atendimento`.
+--  16. ✅ RESOLVIDO — `valor_total_coparticipacao` (`cp.vl_coparticipacao`)
+--      NULL em 333 contas da base viva (idestabelecimento=19) — campo
+--      obrigatório do XSD ficava vazio. Corrigido com
+--      `COALESCE(cp.vl_coparticipacao, 0.00)`, mesmo padrão de fallback zero
+--      já usado em `valor_pago_fornecedores`/`valor_total_tabela_propria`.
+--
+-- Itens que PERMANECEM bloqueando a transmissão real de 04/2026 — não são bug
+-- de JOIN/lógica desta query (os valores lidos do banco estão corretos), são
+-- LACUNA DE CADASTRO na base ou DECISÃO DE NEGÓCIO ainda pendente, então não
+-- foram "resolvidos" aqui para não inventar dado que a query não tem como
+-- saber:
+--  17. ✅ RESOLVIDO 2026-09-22 — `executante_municipio` vazio em 1.746 das
+--      2.067 linhas (84%) da geração de teste de 04/2026, 1.740 delas de UM
+--      ÚNICO prestador (Laboratório Saúde Ltda, CNPJ 91.671.792/0001-81),
+--      cuja `pessoa_juridica.cep` estava NULL (idpessoa_juridica=90,
+--      confirmado via MCP MySQL 2026-09-21). Johnathan corrigiu o cadastro em
+--      produção (novo registro `pessoa_juridica`, idpessoa_juridica=1184,
+--      mesmo CNPJ, CEP 90230020 → resolve para Porto Alegre/RS). Reprocessado
+--      e validado 2026-09-22: 0 erros de `executante_municipio` no CSV de
+--      04/2026 (population/contagem de contas idêntica: 279 contas, 2.067
+--      itens, sem redundância nem falta de registro).
+--  18. ✅ RESOLVIDO 2026-09-22 — `beneficiario_municipio_residencia` vazio em
+--      168 linhas / 17 beneficiários distintos da geração de teste de
+--      04/2026 (mesma causa raiz do item 17: endereço sem CEP resolvível via
+--      `logradouro`). Johnathan corrigiu os 17 cadastros em produção.
+--      Reprocessado e validado 2026-09-22: 0 erros de
+--      `beneficiario_municipio_residencia` no CSV de 04/2026 (population
+--      idêntica: 279 contas, 2.067 itens, sem redundância nem falta de
+--      registro). Único erro estrutural remanescente em 04/2026 é o item 13
+--      (`origem_evento_atencao`, decisão de negócio, não cadastro).
+-- -----------------------------------------------------------------------------
+-- Ajustes 2026-09-22 — auditoria das competências 06/2026 e 07/2026 (2.183 e
+-- 2.412 contas):
+--  19. ✅ RESOLVIDO — `quantidade_paga`/`valor_pago_procedimento` vazios
+--      quando um item está 100% glosado dentro de um protocolo já Pago
+--      (achado: conta 1209, item 8746 — `vl_total_aprovado` NULL em vez de
+--      0.00, confirmado via MCP MySQL). Como essas colunas só usam
+--      `vl_total_aprovado` quando `ps.protocolo_pago` é verdadeiro (análise já
+--      encerrada), NULL nesse ponto só pode significar "zero aprovado" —
+--      `COALESCE(it.vl_total_aprovado, 0)` aplicado nas duas colunas.
+--  20. ✅ RESOLVIDO — `data_processamento_guia` vazia em contas AVISADAS mas
+--      ainda em análise (`ie_situacao='1'`, achado: contas 2572/2573/3580 de
+--      07/2026) — `dt_fim_analise`, `dt_liberacao_protocolo` e
+--      `dt_autorizacao` legitimamente NULL nesse estágio. Adicionado
+--      `cp.dt_cadastro_conta` como último fallback (NOT NULL), mesmo padrão
+--      dos itens 9/10.
+--
+-- Achados que PERMANECEM sem correção nesta query (lacuna de cadastro/dado de
+-- origem, mesmo critério dos itens 17/18 — não inventar dado):
+--  21. 🔴 `executante_municipio` voltou a falhar em 06/2026 (20 linhas) e
+--      07/2026 (43 linhas) — desta vez por PRESTADORES PESSOA FÍSICA sem
+--      endereço cadastrado (CPFs distintos do Laboratório Saúde já corrigido
+--      no item 17). Detalhe nominal em
+--      `10_PROJETOS/envio-dados-tiss-competencia-07-2026/ANEXOS/competencia-
+--      0{6,7}-2026/CORRECOES-NECESSARIAS.md`.
+--  22. 🔴 Contas com `vl_apresentado=0.00` mas procedimentos ativos de valor
+--      real (04/2026: contas 3/4/5 no sentido contrário; 05/2026: conta 380;
+--      07/2026: contas 2572/2573/3580) — inconsistência entre o valor
+--      cacheado na conta e a soma real dos itens, recorrente mês a mês.
+--      Padrão comum: contas ainda em análise (`ie_situacao='1'`). Não
+--      corrigido na query — decidir qual valor é a fonte de verdade é decisão
+--      de negócio/faturamento, não da query.
+--  23. 🔴 Procedimentos duplicados na origem (`sps_conta_medica_proc`, mesmo
+--      código/quantidade/valor, múltiplas linhas ativas) — recorrente e
+--      crescente mês a mês (05/2026: 3 grupos/1 conta; 06/2026: 9 grupos/6
+--      contas; 07/2026: 31 grupos/25 contas, incluindo as mesmas contas de
+--      06/2026 ainda não corrigidas). Não é bug da query (cada linha é um
+--      `idsps_conta_medica_proc` ativo e distinto) — é lançamento duplicado no
+--      faturamento. Vale um levantamento dedicado com a área de faturamento,
+--      dado o padrão crescente.
+--  24. ✅ RESOLVIDO 2026-09-22 — `cbo_executante` (`cm.cd_cbo`) com códigos que
+--      não existem na tabela CBO do schema oficial da ANS — achado na
+--      validação XML/XSD real de 04/2026 (só alcançável depois que os erros
+--      de CSV pararam de bloquear a validação antes de chegar nessa camada).
+--      5 contas afetadas: 18 (cd_cbo='90'→'225285' Médico urologista,
+--      confirmado por Johnathan: Dr. Romulo Orlando da Silva é urologista,
+--      bate com o exame faturado — US bexiga/próstata/vesículas seminais),
+--      88 ('54'→'225320' Médico em radiologia e diagnóstico por imagem), 104
+--      ('54'→'225305' Médico citopatologista), 107 ('79'→'225305' Médico
+--      citopatologista), 117 ('45'→'225335' Médico patologista clínico /
+--      medicina laboratorial) — estes 4 últimos inferidos pelo procedimento
+--      faturado (nenhum profissional tem especialidade cadastrada em
+--      `profissional_especialidade`), aplicados por decisão de Johnathan.
+--      Correção feita via UPDATE direto em `sps_conta_medica.cd_cbo`
+--      (dado de cadastro, não bug de query) — não pela query, já que o
+--      problema era o valor armazenado na origem. Script com DROP/CREATE de
+--      `trg_sps_conta_medica_before_update` (bloqueava por lote fechado) em
+--      `10_PROJETOS/envio-dados-tiss-competencia-07-2026/ANEXOS/
+--      competencia-04-2026/scripts/`. Validado 2026-09-22: **04/2026 passou
+--      em TODAS as validações** (CSV + geração de XML + schema oficial XSD
+--      da ANS) — primeira competência 100% estruturalmente pronta para
+--      envio, 279 registros, hash `.XTE` calculado com sucesso.
+--      05/06/07-2026 ainda não chegaram nessa camada de validação (têm
+--      bloqueios de CSV anteriores) — o mesmo tipo de achado pode aparecer
+--      neles quando os bloqueios de CSV forem resolvidos.
 -- =============================================================================
